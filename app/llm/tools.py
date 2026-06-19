@@ -1,0 +1,72 @@
+"""Описания инструментов (function calling) для консультанта."""
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_catalog",
+            "description": (
+                "Подобрать 2-3 реальных букета из каталога магазина по бюджету и "
+                "пожеланиям. Возвращает товары с названием, ценой и ссылкой. "
+                "Используй ТОЛЬКО эти товары в ответе клиенту."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "budget_min": {
+                        "type": "number",
+                        "description": "Нижняя граница бюджета в рублях (если известна)",
+                    },
+                    "budget_max": {
+                        "type": "number",
+                        "description": "Верхняя граница бюджета в рублях (если известна)",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Ключевые слова: повод, цвета, виды цветов "
+                            "(например 'розы красные', 'пионы маме', 'герберы')"
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "handoff_to_florist",
+            "description": (
+                "Создать заявку и передать диалог живому флористу. Вызывать СТРОГО "
+                "после того, как ты показал клиенту сводку заказа ('Проверим, всё ли "
+                "правильно...') и клиент ЯВНО её подтвердил ('да'/'верно'). НЕ вызывать "
+                "сразу после получения способа получения — сначала покажи сводку."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Имя клиента"},
+                    "phone": {"type": "string", "description": "Телефон клиента"},
+                    "product_name": {"type": "string", "description": "Название выбранного букета"},
+                    "product_url": {"type": "string", "description": "Ссылка на товар из каталога"},
+                    "price": {"type": "number", "description": "Цена выбранного букета в рублях"},
+                    "delivery_method": {
+                        "type": "string",
+                        "enum": ["доставка", "самовывоз"],
+                        "description": "Способ получения",
+                    },
+                    "budget": {
+                        "type": "string",
+                        "description": "Озвученный бюджет клиента (если был), например '3000-4000'",
+                    },
+                    "comment": {
+                        "type": "string",
+                        "description": "Доп. пожелания клиента (повод, для кого и т.п.)",
+                    },
+                },
+                "required": ["name", "phone", "product_name", "price", "delivery_method"],
+            },
+        },
+    },
+]
