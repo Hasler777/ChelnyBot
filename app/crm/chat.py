@@ -84,6 +84,29 @@ def conversation_id_for(tg_id: int) -> str:
     return f"tg-{tg_id}"
 
 
+async def create_chat(*, tg_id: int, name: str, phone: str | None = None) -> str | None:
+    """Создаёт чат в amoJo (до первого сообщения), возвращает amojo chat_id.
+
+    Этот id нужен, чтобы привязать чат к контакту в amoCRM
+    (POST /api/v4/contacts/chats) — тогда входящее сообщение не создаст
+    отдельную «неразобранную» сделку.
+    """
+    profile: dict = {}
+    if phone:
+        profile["phone"] = phone
+    payload = {
+        "conversation_id": conversation_id_for(tg_id),
+        "user": {
+            "id": f"tg-user-{tg_id}",
+            "name": name or "Клиент",
+            "profile": profile,
+        },
+    }
+    path = f"/v2/origin/custom/{settings.amojo_scope_id}/chats"
+    resp = await _post(path, payload)
+    return resp.get("id") if isinstance(resp, dict) else None
+
+
 async def send_to_amo(*, tg_id: int, text: str, name: str, phone: str | None = None) -> dict:
     """Отправить сообщение клиента в amoCRM (входящее в чат)."""
     now = time.time()

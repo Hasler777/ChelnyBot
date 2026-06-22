@@ -72,6 +72,8 @@ async def _run_search(args: dict) -> str:
 async def generate(tg_id: int, user_text: str) -> ConsultResult:
     """Сформировать ответ консультанта на сообщение пользователя."""
     history = await storage.history(tg_id, limit=20)
+    # в контекст LLM — только реплики клиента и ассистента (без сообщений менеджера)
+    history = [m for m in history if m["role"] in ("user", "assistant")]
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})

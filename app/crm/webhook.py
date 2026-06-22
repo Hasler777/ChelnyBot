@@ -15,24 +15,34 @@ log = logging.getLogger(__name__)
 def _extract(data: dict) -> tuple[str | None, str | None, str | None]:
     """Достаём (conversation_id, text, sender_ref) из тела вебхука amoJo (v2).
 
-    Документированный формат: data["payload"]["conversation_id"] и
-    data["payload"]["message"]["text"]. Conversation_id — наш идентификатор чата
-    (мы задаём его как "tg-<tg_id>"). Оставляем запасные пути на случай отличий.
+    Реальный формат события: всё вложено в data["message"]:
+        {"account_id": "...", "message": {
+            "conversation": {"id": "<uuid>", "client_id": "tg-<tg_id>"},
+            "sender": {"id": "...", "name": "..."},
+            "message": {"type": "text", "text": "..."}}}
+    Наш идентификатор чата — conversation.client_id ("tg-<tg_id>"), текст —
+    message.message.text. Оставляем запасные пути на случай иного формата.
     """
-    payload = data.get("payload", data)
-    if not isinstance(payload, dict):
-        return None, None, None
+    msg = data.get("message")
+    if not isinstance(msg, dict):
+        msg = data  # запасной путь, если формат отличается
 
+    conversation = msg.get("conversation") or {}
     conv = (
-        payload.get("conversation_id")
-        or payload.get("client_id")
-        or (payload.get("receiver") or {}).get("client_id")
+        conversation.get("client_id")
+        or conversation.get("id")
+        or (msg.get("receiver") or {}).get("client_id")
+        or msg.get("conversation_id")
+        or msg.get("client_id")
     )
 
-    message = payload.get("message") or {}
-    text = message.get("text") if isinstance(message, dict) else None
+    inner = msg.get("message")
+    if isinstance(inner, dict):
+        text = inner.get("text")
+    else:
+        text = msg.get("text")
 
-    sender = payload.get("sender") or {}
+    sender = msg.get("sender") or {}
     sender_ref = sender.get("ref_id")  # есть у сообщений менеджера
     return conv, text, sender_ref
 
@@ -64,8 +74,13 @@ async def handle_webhook(request: web.Request) -> web.Response:
 
 
 def build_app(bot: Bot) -> web.Application:
+    from app.widget_api import add_widget_routes
+
     app = web.Application()
     app["bot"] = bot
+    # amoCRM шлёт хук на <webhook_path>/<scope_id>; принимаем и с сегментом, и без него
     app.router.add_post(settings.webhook_path, handle_webhook)
+    app.router.add_post(settings.webhook_path.rstrip("/") + "/{scope_id}", handle_webhook)
     app.router.add_get("/health", lambda _r: web.Response(text="ok"))
+    add_widget_routes(app)
     return app

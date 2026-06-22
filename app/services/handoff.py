@@ -22,10 +22,16 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     # сохраняем контактные данные пользователя
     await storage.update_user(tg_id, name=data.name or None, phone=data.phone or None)
 
+    # один Telegram-пользователь = один контакт в amoCRM (чтобы чат и все сделки
+    # клиента всегда висели на одном контакте)
+    user = await storage.get_user(tg_id)
+    existing_contact_id = user.amo_contact_id if user else None
+
     lead_id: int | None = None
+    contact_id: int | None = existing_contact_id
     if settings.amo_enabled:
         try:
-            lead_id = await amo.create_lead(
+            lead_id, contact_id = await amo.create_lead(
                 name=data.name,
                 phone=data.phone,
                 product_name=data.product_name,
@@ -34,6 +40,7 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
                 budget=data.budget,
                 delivery=data.delivery_method,
                 comment=data.comment,
+                contact_id=existing_contact_id,
             )
             log.info("Создана сделка amoCRM #%s для tg_id=%s", lead_id, tg_id)
         except AmoError as exc:
@@ -48,16 +55,53 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
         state=STATE_HANDOFF,
         amo_lead_id=lead_id,
         amojo_conversation_id=conversation_id,
+        amo_contact_id=contact_id,
     )
 
-    # отправляем в amoJo первую реплику-контекст, чтобы у менеджера открылся чат
+    # открываем чат в amoJo. ВАЖНО: сперва создаём чат и привязываем его к контакту,
+    # и только потом шлём первое сообщение — иначе amoCRM создаст вторую,
+    # «неразобранную» сделку (дубль).
     if settings.amojo_enabled:
-        summary = (
-            f"Заявка от {data.name or 'клиента'} ({data.phone}). "
-            f"Букет: {data.product_name} — {int(data.price)} ₽, {data.delivery_method}."
-        )
         try:
-            await chat.send_to_amo(tg_id=tg_id, text=summary, name=data.name or "Клиент",
+            if contact_id:
+                chat_id = await chat.create_chat(
+                    tg_id=tg_id, name=data.name or "Клиент", phone=data.phone or None
+                )
+                if chat_id:
+                    try:
+                        await amo.link_chat_to_contact(contact_id, chat_id)
+                    except AmoError as exc:
+                        # привязка не критична — сообщение всё равно отправим
+                        log.warning("Привязка чата к контакту не удалась (продолжаем): %s", exc)
+            client_name = data.name or "Клиент"
+            # вся переписка клиента с ботом — чтобы у менеджера был полный контекст
+            history = await storage.history_full(tg_id, limit=80)
+            role_names = {"user": "Клиент", "assistant": "Соня", "manager": "Менеджер"}
+            dialog_lines = [
+                f"{role_names.get(r['role'], r['role'])}: {r['content']}"
+                for r in history if r.get("content")
+            ]
+            if dialog_lines:
+                transcript = "📋 Переписка клиента с Соней:\n\n" + "\n".join(dialog_lines)
+                await chat.send_to_amo(tg_id=tg_id, text=transcript,
+                                       name=client_name, phone=data.phone or None)
+            head = f"📌 Новая заявка от {client_name}"
+            if data.phone:
+                head += f", тел. {data.phone}"
+            details = []
+            if data.product_name:
+                details.append(
+                    f"{data.product_name} — {int(data.price)} ₽" if data.price
+                    else data.product_name
+                )
+            elif data.budget:
+                details.append(f"бюджет {data.budget}")
+            if data.delivery_method:
+                details.append(data.delivery_method)
+            if data.comment:
+                details.append(data.comment)
+            summary = head + ("\n" + ", ".join(details) if details else "")
+            await chat.send_to_amo(tg_id=tg_id, text=summary, name=client_name,
                                    phone=data.phone or None)
         except Exception as exc:  # noqa: BLE001
             log.exception("Не удалось открыть чат в amoJo: %s", exc)
@@ -66,14 +110,15 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
 
 
 async def forward_client_message(tg_id: int, text: str) -> None:
-    """В режиме handoff — переслать сообщение клиента в amoCRM чат."""
-    if not settings.amojo_enabled:
-        log.warning("amoJo не настроен — сообщение клиента не доставлено менеджеру")
-        return
-    user = await storage.get_user(tg_id)
-    name = (user.name if user else None) or "Клиент"
-    phone = user.phone if user else None
-    try:
-        await chat.send_to_amo(tg_id=tg_id, text=text, name=name, phone=phone)
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Не удалось переслать сообщение клиента в amoJo: %s", exc)
+    """В режиме handoff — сохранить сообщение клиента (его покажет виджет в карточке)
+    и, если настроен нативный чат amoJo, продублировать туда."""
+    await storage.add_message(tg_id, "user", text)
+
+    if settings.amojo_enabled:
+        user = await storage.get_user(tg_id)
+        name = (user.name if user else None) or "Клиент"
+        phone = user.phone if user else None
+        try:
+            await chat.send_to_amo(tg_id=tg_id, text=text, name=name, phone=phone)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Не удалось переслать сообщение клиента в amoJo: %s", exc)

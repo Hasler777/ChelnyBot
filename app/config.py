@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     webhook_port: int = 8080
     webhook_path: str = "/amojo/webhook"
 
+    # Виджет amoCRM (чат-панель в карточке сделки)
+    widget_public_url: str = "https://144-31-108-55.sslip.io"
+    widget_token: str = ""  # общий секрет, который виджет шлёт в запросах
+
     # Прочее
     db_path: str = "data/bot.db"
     log_level: str = "INFO"

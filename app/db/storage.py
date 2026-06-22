@@ -28,6 +28,7 @@ class User:
     amo_lead_id: int | None
     amojo_conversation_id: str | None
     amojo_chat_id: str | None
+    amo_contact_id: int | None = None
     amo_last_note_id: int = 0
 
 
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
     amo_lead_id INTEGER,
     amojo_conversation_id TEXT,
     amojo_chat_id TEXT,
+    amo_contact_id INTEGER,
     created_at REAL,
     updated_at REAL
 );
@@ -65,13 +67,15 @@ class Storage:
         self._db = await aiosqlite.connect(self._path)
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(_SCHEMA)
-        # миграция для уже существующих БД
-        try:
-            await self._db.execute(
-                "ALTER TABLE users ADD COLUMN amo_last_note_id INTEGER DEFAULT 0"
-            )
-        except Exception:  # noqa: BLE001 — колонка уже есть
-            pass
+        # миграции для уже существующих БД
+        for ddl in (
+            "ALTER TABLE users ADD COLUMN amo_last_note_id INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN amo_contact_id INTEGER",
+        ):
+            try:
+                await self._db.execute(ddl)
+            except Exception:  # noqa: BLE001 — колонка уже есть
+                pass
         await self._db.commit()
 
     async def close(self) -> None:
@@ -109,6 +113,13 @@ class Storage:
         row = await cur.fetchone()
         return self._row_to_user(row) if row else None
 
+    async def find_by_lead_id(self, lead_id: int) -> User | None:
+        cur = await self.db.execute(
+            "SELECT * FROM users WHERE amo_lead_id = ?", (lead_id,)
+        )
+        row = await cur.fetchone()
+        return self._row_to_user(row) if row else None
+
     async def update_user(self, tg_id: int, **fields) -> None:
         if not fields:
             return
@@ -139,6 +150,7 @@ class Storage:
             amo_lead_id=row["amo_lead_id"],
             amojo_conversation_id=row["amojo_conversation_id"],
             amojo_chat_id=row["amojo_chat_id"],
+            amo_contact_id=row["amo_contact_id"] if "amo_contact_id" in keys else None,
             amo_last_note_id=row["amo_last_note_id"] if "amo_last_note_id" in keys else 0,
         )
 
@@ -168,6 +180,19 @@ class Storage:
         for row in reversed(rows):
             out.append({"role": row["role"], "content": row["content"]})
         return out
+
+    async def history_full(self, tg_id: int, limit: int = 200) -> list[dict]:
+        """История с временем и id — для отображения в виджете amoCRM."""
+        cur = await self.db.execute(
+            "SELECT id, role, content, ts FROM messages WHERE tg_id = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (tg_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [
+            {"id": r["id"], "role": r["role"], "content": r["content"], "ts": r["ts"]}
+            for r in reversed(rows)
+        ]
 
 
 storage = Storage(settings.db_path)

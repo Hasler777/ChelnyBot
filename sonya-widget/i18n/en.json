@@ -1,0 +1,10 @@
+{
+  "widget": {
+    "name": "Sonya — client chat",
+    "description": "Chat with the Telegram client right inside the lead card.",
+    "short_description": "Telegram client chat"
+  },
+  "settings": {
+    "note": "Can be left empty"
+  }
+}

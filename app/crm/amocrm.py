@@ -121,6 +121,17 @@ class AmoClient:
 
     # ---------- бизнес-операции ----------
     async def _create_contact(self, name: str, phone: str) -> int:
+        # переиспользуем существующий контакт по телефону — не плодим дубликаты
+        # и сохраняем привязку чата у постоянного клиента
+        digits = "".join(ch for ch in phone if ch.isdigit()) if phone else ""
+        if digits:
+            try:
+                found = await self._request("GET", "/api/v4/contacts", params={"query": digits})
+                contacts = found.get("_embedded", {}).get("contacts", [])
+                if contacts:
+                    return contacts[0]["id"]
+            except AmoError as exc:
+                log.warning("Поиск контакта по телефону не удался: %s", exc)
         cf_values = []
         if settings.amo_cf_contact_phone and phone:
             cf_values.append({
@@ -149,9 +160,15 @@ class AmoClient:
 
     async def create_lead(self, *, name: str, phone: str, product_name: str,
                           product_url: str, price: float, budget: str,
-                          delivery: str, comment: str) -> int:
-        """Создаёт контакт и сделку, возвращает lead_id."""
-        contact_id = await self._create_contact(name, phone)
+                          delivery: str, comment: str,
+                          contact_id: int | None = None) -> tuple[int, int]:
+        """Создаёт сделку, возвращает (lead_id, contact_id).
+
+        Если contact_id передан — переиспользуем его (один tg = один контакт),
+        иначе ищем по телефону / создаём новый.
+        """
+        if not contact_id:
+            contact_id = await self._create_contact(name, phone)
 
         lead_name = f"Заявка из Telegram: {product_name or 'букет'}"
         lead: dict = {
@@ -173,7 +190,20 @@ class AmoClient:
 
         if comment:
             await self._add_note(lead_id, comment)
-        return lead_id
+        return lead_id, contact_id
+
+    async def link_chat_to_contact(self, contact_id: int, chat_id: str) -> None:
+        """Привязывает чат amoJo к контакту, чтобы входящее сообщение не плодило
+        отдельную «неразобранную» сделку."""
+        body = [{"contact_id": contact_id, "chat_id": chat_id}]
+        try:
+            await self._request("POST", "/api/v4/contacts/chats", json_body=body)
+        except AmoError as exc:
+            # чат уже привязан к этому/другому контакту (постоянный клиент) — не критично
+            if "AlreadyExists" in str(exc):
+                log.info("Чат уже привязан к контакту — пропускаем")
+                return
+            raise
 
     async def _add_note(self, lead_id: int, text: str) -> None:
         body = [{"note_type": "common", "params": {"text": text}}]
@@ -181,6 +211,10 @@ class AmoClient:
             await self._request("POST", f"/api/v4/leads/{lead_id}/notes", json_body=body)
         except AmoError as exc:
             log.warning("Не удалось добавить примечание к сделке %s: %s", lead_id, exc)
+
+    async def add_note(self, lead_id: int, text: str) -> None:
+        """Публичная обёртка для добавления примечания к сделке."""
+        await self._add_note(lead_id, text)
 
 
 amo = AmoClient()

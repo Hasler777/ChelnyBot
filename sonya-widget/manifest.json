@@ -1,0 +1,29 @@
+{
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "1.0.5",
+    "interface_version": 1,
+    "init_once": false,
+    "locale": [
+      "ru",
+      "en"
+    ],
+    "installation": true,
+    "support": {
+      "link": "https://cvety-naberezhnye.ru",
+      "email": "a.platya@gmail.com"
+    }
+  },
+  "locations": [
+    "lcard-1"
+  ],
+  "settings": {
+    "note": {
+      "name": "settings.note",
+      "type": "text",
+      "required": false
+    }
+  }
+}

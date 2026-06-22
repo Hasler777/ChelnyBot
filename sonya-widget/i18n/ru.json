@@ -1,0 +1,10 @@
+{
+  "widget": {
+    "name": "Соня — чат с клиентом",
+    "description": "Переписка с клиентом из Telegram прямо в карточке сделки.",
+    "short_description": "Чат с клиентом Telegram"
+  },
+  "settings": {
+    "note": "Можно оставить пустым"
+  }
+}
