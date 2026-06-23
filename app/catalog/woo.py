@@ -16,6 +16,10 @@ from app.config import settings
 
 log = logging.getLogger(__name__)
 
+# Категории-аксессуары (допы), которые не должны попадать в подбор букетов —
+# их предлагаем отдельно как допродажу, а не как «букет».
+_ACCESSORY_CATEGORIES = {"ДОПОЛНИТЕЛЬНЫЕ ТОВАРЫ", "ШАРЫ", "ИГРУШКИ"}
+
 
 @dataclass
 class Product:
@@ -127,6 +131,14 @@ class Catalog:
         """
         await self._ensure_fresh()
         items = [p for p in self._products if p.in_stock]
+
+        # Исключаем из подбора аксессуары-допы (шары, игрушки, сладости): это товары
+        # для допродажи, а не букеты. Иначе как самые дешёвые они всплывают в «популярных»
+        # вместо цветов (на «букет маме» бот показывал шарики за 495 ₽).
+        items = [
+            p for p in items
+            if not (_ACCESSORY_CATEGORIES & {c.strip().upper() for c in p.categories})
+        ]
 
         if budget_min is not None:
             items = [p for p in items if p.price >= budget_min * 0.9]
