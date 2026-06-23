@@ -28,6 +28,12 @@ MAX_TOOL_ITERS = 4
 # Ссылка на товары магазина (для проверки, что модель не выдумала URL)
 _SHOP_URL_RE = re.compile(r"https?://[^\s)<>]*cvety-naberezhnye\.ru[^\s)<>]*", re.I)
 
+# Признак «обещаю подобрать», когда модель тянет время вместо вызова search_catalog
+_PROMISE_RE = re.compile(
+    r"подбер|подыщ|минут|момент|секунд|сейчас\s+(покажу|найд|подбер)|посмотрю|подожд",
+    re.I,
+)
+
 
 async def _guard_reply(tg_id: int, text: str, offered: list[Product]) -> str:
     """Защита от выдуманных товаров. Если в ответе есть ссылка на магазин,
@@ -140,6 +146,7 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
 
     # товары из последнего вызова search_catalog — для проверки ответа модели
     offered: list[Product] = []
+    did_search = False  # был ли реальный вызов search_catalog в этом ходе
 
     for _ in range(MAX_TOOL_ITERS):
         resp = await client.chat.completions.create(
@@ -154,6 +161,14 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
 
         if not msg.tool_calls:
             text = (msg.content or "").strip()
+            # «Минутку, сейчас подберу!» без вызова инструмента — модель тянет время
+            # и ход заканчивается без товаров. Форсируем реальный поиск и показываем
+            # настоящие варианты, чтобы клиент не остался без ответа.
+            if not did_search and not _SHOP_URL_RE.search(text) and _PROMISE_RE.search(text):
+                products = await catalog.search(query=user_text or None, limit=3)
+                if products:
+                    log.info("Модель пообещала, но не искала — форсирую поиск для %s", tg_id)
+                    return ConsultResult(text=_render_products(products))
             # защита от галлюцинаций: ссылки на несуществующие товары (в т.ч.
             # повтор фейков из истории) подменяем реальным списком из каталога
             text = await _guard_reply(tg_id, text, offered)
@@ -187,6 +202,7 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
 
             if name == "search_catalog":
                 result, offered = await _run_search(args)
+                did_search = True
             else:
                 result = json.dumps({"error": f"unknown tool {name}"}, ensure_ascii=False)
 
