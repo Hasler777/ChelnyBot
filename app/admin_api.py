@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 import logging
+import time
 
+import aiohttp
 from aiohttp import web
 
 from app.config import settings
@@ -19,6 +21,33 @@ from app.db.storage import storage
 log = logging.getLogger(__name__)
 
 _ROLE_MAP = {"user": "client", "assistant": "bot", "manager": "manager"}
+
+# Кэш курса USD->RUB (живой курс ЦБ РФ), чтобы рубли были корректными
+_RATE_CACHE = {"value": 0.0, "ts": 0.0}
+_RATE_TTL = 6 * 3600  # обновляем раз в 6 часов
+
+
+async def _usd_rub_rate() -> float:
+    """Курс USD->RUB: приоритет — ручной USD_RUB_RATE из .env, иначе живой курс
+    ЦБ РФ (кэш 6 ч). При сбоях возвращаем последнее значение или 0."""
+    if settings.usd_rub_rate and settings.usd_rub_rate > 0:
+        return float(settings.usd_rub_rate)
+    now = time.time()
+    if _RATE_CACHE["value"] and now - _RATE_CACHE["ts"] < _RATE_TTL:
+        return _RATE_CACHE["value"]
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                "https://www.cbr-xml-daily.ru/daily_json.js",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as r:
+                data = await r.json(content_type=None)
+        rate = float(data["Valute"]["USD"]["Value"])
+        _RATE_CACHE.update(value=rate, ts=now)
+        return rate
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Не удалось получить курс USD/RUB: %s", exc)
+        return _RATE_CACHE["value"] or 0.0
 
 
 def _check_token(token: str | None) -> bool:
@@ -32,7 +61,7 @@ async def api_users(request: web.Request) -> web.Response:
     users = await storage.users_overview()
     totals = await storage.totals()
     return web.json_response(
-        {"users": users, "totals": totals, "usd_rub_rate": settings.usd_rub_rate}
+        {"users": users, "totals": totals, "usd_rub_rate": await _usd_rub_rate()}
     )
 
 
@@ -62,7 +91,7 @@ async def api_dialog(request: web.Request) -> web.Response:
                 "state": user.state if user else None,
                 "amo_lead_id": user.amo_lead_id if user else None,
             },
-            "usd_rub_rate": settings.usd_rub_rate,
+            "usd_rub_rate": await _usd_rub_rate(),
         }
     )
 
@@ -173,9 +202,15 @@ let data = [];
 let sortK = 'last_ts', sortDir = -1;
 
 function money(usd){
-  const u = '$' + (usd||0).toFixed(4);
-  if(rate>0) return u + ' · ' + Math.round((usd||0)*rate) + ' ₽';
-  return u;
+  usd = usd || 0;
+  const dollars = '$' + usd.toFixed(4);
+  if(rate>0){
+    const rub = usd * rate;
+    const r = rub >= 100 ? Math.round(rub).toLocaleString('ru-RU') : rub.toFixed(2);
+    // основная сумма в рублях, доллары — мелким серым рядом
+    return `${r} ₽ <span style="opacity:.45;font-size:.85em">${dollars}</span>`;
+  }
+  return dollars;
 }
 function fmt(ts){ if(!ts) return '—'; const d=new Date(ts*1000); return d.toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
 function label(from){ return from==='manager'?'Менеджер':from==='bot'?'Соня (бот)':'Клиент'; }
