@@ -130,6 +130,13 @@ class Catalog:
         Сортировка: сначала наиболее релевантные по запросу, затем ближе к верхней
         границе бюджета (чтобы предлагать что-то побогаче, но в рамках бюджета).
         """
+        # Модель часто шлёт 0 (или отрицательное) как «бюджет не задан» — нельзя
+        # понимать это как потолок 0 ₽, иначе из каталога отфильтруется ВСЁ.
+        if not budget_min or budget_min <= 0:
+            budget_min = None
+        if not budget_max or budget_max <= 0:
+            budget_max = None
+
         await self._ensure_fresh()
         items = [p for p in self._products if p.in_stock]
 
