@@ -158,19 +158,22 @@ class Catalog:
         if query:
             tokens = [t for t in query.lower().split() if len(t) > 2]
 
-        # «Тянемся к верхней границе» (предлагаем побогаче) ТОЛЬКО когда клиент назвал
-        # полный диапазон бюджета. Если бюджета нет или указан лишь потолок (модель
-        # нередко придумывает завышенный budget_max сама) — сортируем недорогое первым,
-        # иначе наверх всплывают самые дорогие букеты и пугают клиента.
-        anchor_to_max = budget_min is not None and budget_max is not None
+        # Якорь цены для сортировки «ближе к якорю — выше»:
+        #  - назван потолок -> тянемся к нему (предложить побогаче в рамках);
+        #  - назван только «от N» -> показываем около N;
+        #  - бюджет не назван -> целимся в СРЕДНИЙ сегмент (DEFAULT_BUDGET_ANCHOR),
+        #    а не в самые дешёвые букеты и не в премиум.
+        if budget_max is not None:
+            price_anchor = budget_max
+        elif budget_min is not None:
+            price_anchor = budget_min
+        else:
+            price_anchor = settings.default_budget_anchor
 
         def score(p: Product) -> tuple:
             text = (p.name + " " + " ".join(p.categories)).lower()
             relevance = sum(1 for t in tokens if t in text)
-            if anchor_to_max:
-                closeness = -abs(budget_max - p.price)
-            else:
-                closeness = -p.price
+            closeness = -abs(price_anchor - p.price)
             return (relevance, closeness)
 
         items.sort(key=score, reverse=True)

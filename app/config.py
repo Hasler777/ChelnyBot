@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     woo_base_url: str = "https://cvety-naberezhnye.ru"
     woo_cache_ttl: int = 1800
     woo_max_products: int = 400
+    # На какой ценовой сегмент целиться, когда клиент не назвал бюджет (₽).
+    # Не самые дешёвые и не премиум — «средний приятный» букет.
+    default_budget_anchor: int = 5000
 
     # amoCRM REST
     amo_base_url: str = ""
