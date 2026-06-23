@@ -53,7 +53,13 @@ TOOLS = [
                     "phone": {"type": "string", "description": "Телефон клиента"},
                     "product_name": {"type": "string", "description": "Название выбранного букета"},
                     "product_url": {"type": "string", "description": "Ссылка на товар из каталога"},
-                    "price": {"type": "number", "description": "Цена выбранного букета в рублях"},
+                    "price": {
+                        "type": "number",
+                        "description": (
+                            "Итоговая сумма заказа в рублях: цена букета плюс цена допов, "
+                            "если клиент их добавил (открытка, бант, Raffaello и т.п.)"
+                        ),
+                    },
                     "delivery_method": {
                         "type": "string",
                         "enum": ["доставка", "самовывоз"],
@@ -65,7 +71,10 @@ TOOLS = [
                     },
                     "comment": {
                         "type": "string",
-                        "description": "Доп. пожелания клиента (повод, для кого и т.п.)",
+                        "description": (
+                            "Доп. пожелания клиента (повод, для кого) И перечень допродаж, "
+                            "если добавляли, например '+ открытка с подписью (100 ₽)'"
+                        ),
                     },
                 },
                 "required": [],
