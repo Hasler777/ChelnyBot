@@ -1,0 +1,47 @@
+name: Deploy to VPS
+
+# Автодеплой Сони на прод-сервер при пуше в main.
+# Код едет tar-потоком по SSH (на сервере нет rsync), затем docker compose
+# пересобирает и перезапускает контейнер. Файлы .env и data/ на сервере
+# НЕ перезаписываются — там боевые секреты и БотовскаяБД.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # позволяет запустить деплой вручную из вкладки Actions
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false  # не обрывать идущий деплой следующим пушем
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Sync code & rebuild container
+        run: |
+          tar czf - \
+            --exclude='__pycache__' --exclude='*.pyc' \
+            app Dockerfile docker-compose.yml requirements.txt scripts sonya-widget .dockerignore \
+          | ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              'cd /opt/sonya && tar xzf - && docker compose up -d --build && docker image prune -f >/dev/null 2>&1 || true'
+
+      - name: Health check
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" '
+            sleep 4
+            echo "container: $(docker ps --filter name=sonya-bot-1 --format "{{.Status}}")"
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/admin)
+            echo "GET /admin -> $code"
+            test "$code" = "200"
+          '
