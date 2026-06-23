@@ -167,5 +167,11 @@ class Catalog:
         items.sort(key=score, reverse=True)
         return items[:limit]
 
+    async def known_urls(self) -> set[str]:
+        """Множество ссылок всех реальных товаров — для проверки, что модель
+        не выдумала URL (ссылки сравниваем без хвостового слэша)."""
+        await self._ensure_fresh()
+        return {p.url.rstrip("/") for p in self._products if p.url}
+
 
 catalog = Catalog()

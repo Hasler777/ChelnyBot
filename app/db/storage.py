@@ -166,6 +166,11 @@ class Storage:
         )
 
     # ---------- messages ----------
+    async def clear_messages(self, tg_id: int) -> None:
+        """Очистить историю диалога (например, при /start — начать заново)."""
+        await self.db.execute("DELETE FROM messages WHERE tg_id = ?", (tg_id,))
+        await self.db.commit()
+
     async def add_message(self, tg_id: int, role: str, content: str) -> None:
         await self.db.execute(
             "INSERT INTO messages (tg_id, role, content, ts) VALUES (?, ?, ?, ?)",

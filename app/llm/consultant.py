@@ -29,14 +29,21 @@ MAX_TOOL_ITERS = 4
 _SHOP_URL_RE = re.compile(r"https?://[^\s)<>]*cvety-naberezhnye\.ru[^\s)<>]*", re.I)
 
 
-def _has_hallucinated_links(text: str, offered: list[Product]) -> bool:
-    """True, если в ответе есть ссылка на магазин, которой НЕТ среди реально
-    подобранных товаров (модель сочинила URL/товар)."""
+async def _guard_reply(tg_id: int, text: str, offered: list[Product]) -> str:
+    """Защита от выдуманных товаров. Если в ответе есть ссылка на магазин,
+    которой НЕТ среди реальных товаров каталога (модель сочинила URL или
+    повторила фейк из истории диалога) — подменяем на реальный список.
+    Работает даже когда модель не делала свежий поиск в этом ходе."""
     urls = _SHOP_URL_RE.findall(text)
     if not urls:
-        return False
-    valid = {p.url.rstrip("/") for p in offered}
-    return any(u.rstrip("/") not in valid for u in urls)
+        return text
+    valid = await catalog.known_urls()
+    valid |= {p.url.rstrip("/") for p in offered}
+    if all(u.rstrip("/") in valid for u in urls):
+        return text  # все ссылки ведут на реальные товары
+    log.warning("LLM выдал несуществующие ссылки для %s — заменяю реальными", tg_id)
+    products = offered or await catalog.search(limit=3)
+    return _render_products(products) if products else text
 
 
 def _render_products(offered: list[Product]) -> str:
@@ -147,11 +154,9 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
 
         if not msg.tool_calls:
             text = (msg.content or "").strip()
-            # защита от галлюцинаций: если модель сослалась на несуществующие
-            # товары/ссылки — подменяем на реальный список из каталога
-            if offered and _has_hallucinated_links(text, offered):
-                log.warning("LLM выдал несуществующие ссылки для %s — заменяю реальными", tg_id)
-                text = _render_products(offered)
+            # защита от галлюцинаций: ссылки на несуществующие товары (в т.ч.
+            # повтор фейков из истории) подменяем реальным списком из каталога
+            text = await _guard_reply(tg_id, text, offered)
             return ConsultResult(text=text or "Извините, повторите, пожалуйста?")
 
         # есть вызовы инструментов — добавляем сообщение ассистента в контекст
