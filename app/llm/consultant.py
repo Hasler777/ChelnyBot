@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 
-from app.catalog.woo import catalog
+from app.catalog.woo import Product, catalog
 from app.config import settings
 from app.db.storage import storage
 from app.llm.client import client
@@ -23,6 +24,30 @@ from app.llm.tools import TOOLS
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ITERS = 4
+
+# Ссылка на товары магазина (для проверки, что модель не выдумала URL)
+_SHOP_URL_RE = re.compile(r"https?://[^\s)<>]*cvety-naberezhnye\.ru[^\s)<>]*", re.I)
+
+
+def _has_hallucinated_links(text: str, offered: list[Product]) -> bool:
+    """True, если в ответе есть ссылка на магазин, которой НЕТ среди реально
+    подобранных товаров (модель сочинила URL/товар)."""
+    urls = _SHOP_URL_RE.findall(text)
+    if not urls:
+        return False
+    valid = {p.url.rstrip("/") for p in offered}
+    return any(u.rstrip("/") not in valid for u in urls)
+
+
+def _render_products(offered: list[Product]) -> str:
+    """Детерминированный список товаров из настоящих результатов поиска —
+    запасной вариант, когда модель сгаллюцинировала ссылки/цены."""
+    lines = [
+        f"{i}. {p.name} — {int(p.price)} ₽\n{p.url}"
+        for i, p in enumerate(offered[:3], 1)
+    ]
+    return "Вот варианты из нашего каталога:\n\n" + "\n\n".join(lines) + \
+        "\n\nКакой больше нравится? 🌷"
 
 
 async def _record_usage(tg_id: int, resp) -> None:
@@ -81,7 +106,7 @@ class ConsultResult:
     handoff: HandoffData | None = None
 
 
-async def _run_search(args: dict) -> str:
+async def _run_search(args: dict) -> tuple[str, list[Product]]:
     products = await catalog.search(
         budget_min=args.get("budget_min"),
         budget_max=args.get("budget_max"),
@@ -90,8 +115,11 @@ async def _run_search(args: dict) -> str:
     )
     if not products:
         return json.dumps({"products": [], "note": "ничего не найдено в этом бюджете"},
-                          ensure_ascii=False)
-    return json.dumps({"products": [p.as_dict() for p in products]}, ensure_ascii=False)
+                          ensure_ascii=False), []
+    return (
+        json.dumps({"products": [p.as_dict() for p in products]}, ensure_ascii=False),
+        products,
+    )
 
 
 async def generate(tg_id: int, user_text: str) -> ConsultResult:
@@ -103,12 +131,15 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
+    # товары из последнего вызова search_catalog — для проверки ответа модели
+    offered: list[Product] = []
+
     for _ in range(MAX_TOOL_ITERS):
         resp = await client.chat.completions.create(
             model=settings.openrouter_model,
             messages=messages,
             tools=TOOLS,
-            temperature=0.6,
+            temperature=0.3,
             extra_body={"usage": {"include": True}},
         )
         await _record_usage(tg_id, resp)
@@ -116,6 +147,11 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
 
         if not msg.tool_calls:
             text = (msg.content or "").strip()
+            # защита от галлюцинаций: если модель сослалась на несуществующие
+            # товары/ссылки — подменяем на реальный список из каталога
+            if offered and _has_hallucinated_links(text, offered):
+                log.warning("LLM выдал несуществующие ссылки для %s — заменяю реальными", tg_id)
+                text = _render_products(offered)
             return ConsultResult(text=text or "Извините, повторите, пожалуйста?")
 
         # есть вызовы инструментов — добавляем сообщение ассистента в контекст
@@ -145,7 +181,7 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
                 return ConsultResult(handoff=HandoffData.from_args(args))
 
             if name == "search_catalog":
-                result = await _run_search(args)
+                result, offered = await _run_search(args)
             else:
                 result = json.dumps({"error": f"unknown tool {name}"}, ensure_ascii=False)
 
