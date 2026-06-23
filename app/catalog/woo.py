@@ -140,9 +140,12 @@ class Catalog:
         def score(p: Product) -> tuple:
             text = (p.name + " " + " ".join(p.categories)).lower()
             relevance = sum(1 for t in tokens if t in text)
-            # ближе к верхней границе бюджета — выше
-            anchor = budget_max if budget_max is not None else p.price
-            closeness = -abs(anchor - p.price)
+            if budget_max is not None:
+                # ближе к верхней границе бюджета — выше
+                closeness = -abs(budget_max - p.price)
+            else:
+                # бюджет не задан — предлагаем недорогое первым, чтобы не пугать ценой
+                closeness = -p.price
             return (relevance, closeness)
 
         items.sort(key=score, reverse=True)
