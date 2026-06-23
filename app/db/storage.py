@@ -52,8 +52,19 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     ts REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_id INTEGER NOT NULL,
+    model TEXT,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    cost REAL NOT NULL DEFAULT 0,
+    ts REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_tg ON messages(tg_id, id);
 CREATE INDEX IF NOT EXISTS idx_users_conv ON users(amojo_conversation_id);
+CREATE INDEX IF NOT EXISTS idx_usage_tg ON usage(tg_id);
 """
 
 
@@ -193,6 +204,81 @@ class Storage:
             {"id": r["id"], "role": r["role"], "content": r["content"], "ts": r["ts"]}
             for r in reversed(rows)
         ]
+
+    # ---------- usage / стоимость ----------
+    async def add_usage(
+        self,
+        tg_id: int,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cost: float,
+    ) -> None:
+        """Зафиксировать расход токенов и стоимость одного вызова LLM."""
+        await self.db.execute(
+            "INSERT INTO usage (tg_id, model, prompt_tokens, completion_tokens, "
+            "total_tokens, cost, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                tg_id,
+                model,
+                prompt_tokens,
+                completion_tokens,
+                prompt_tokens + completion_tokens,
+                cost,
+                time.time(),
+            ),
+        )
+        await self.db.commit()
+
+    async def users_overview(self) -> list[dict]:
+        """Сводка по всем пользователям: профиль, число сообщений и стоимость."""
+        cur = await self.db.execute(
+            """
+            SELECT u.tg_id, u.name, u.phone, u.state, u.amo_lead_id,
+                   u.created_at, u.updated_at,
+                   (SELECT COUNT(*) FROM messages m WHERE m.tg_id = u.tg_id) AS msg_count,
+                   (SELECT MAX(ts) FROM messages m WHERE m.tg_id = u.tg_id) AS last_ts,
+                   (SELECT COALESCE(SUM(cost), 0) FROM usage g WHERE g.tg_id = u.tg_id) AS cost,
+                   (SELECT COALESCE(SUM(total_tokens), 0) FROM usage g WHERE g.tg_id = u.tg_id) AS tokens,
+                   (SELECT COUNT(*) FROM usage g WHERE g.tg_id = u.tg_id) AS llm_calls
+            FROM users u
+            ORDER BY (last_ts IS NULL), last_ts DESC
+            """
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def totals(self) -> dict:
+        """Глобальные итоги для шапки админки."""
+        cur = await self.db.execute(
+            "SELECT COUNT(*) AS users FROM users"
+        )
+        users = (await cur.fetchone())["users"]
+        cur = await self.db.execute(
+            "SELECT COALESCE(SUM(cost), 0) AS cost, "
+            "COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls FROM usage"
+        )
+        row = await cur.fetchone()
+        cur = await self.db.execute("SELECT COUNT(*) AS msgs FROM messages")
+        msgs = (await cur.fetchone())["msgs"]
+        return {
+            "users": users,
+            "messages": msgs,
+            "cost": row["cost"],
+            "tokens": row["tokens"],
+            "calls": row["calls"],
+        }
+
+    async def dialog_cost(self, tg_id: int) -> dict:
+        """Стоимость и расход токенов одного диалога."""
+        cur = await self.db.execute(
+            "SELECT COALESCE(SUM(cost), 0) AS cost, "
+            "COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls "
+            "FROM usage WHERE tg_id = ?",
+            (tg_id,),
+        )
+        row = await cur.fetchone()
+        return {"cost": row["cost"], "tokens": row["tokens"], "calls": row["calls"]}
 
 
 storage = Storage(settings.db_path)

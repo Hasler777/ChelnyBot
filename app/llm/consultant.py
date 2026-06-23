@@ -25,6 +25,31 @@ log = logging.getLogger(__name__)
 MAX_TOOL_ITERS = 4
 
 
+async def _record_usage(tg_id: int, resp) -> None:
+    """Сохранить расход токенов и стоимость вызова LLM (OpenRouter возвращает
+    cost при usage.include=true). Ошибки учёта не должны ломать диалог."""
+    try:
+        usage = getattr(resp, "usage", None)
+        if usage is None:
+            return
+        prompt = getattr(usage, "prompt_tokens", 0) or 0
+        completion = getattr(usage, "completion_tokens", 0) or 0
+        # cost приходит как доп. поле OpenRouter (в USD)
+        cost = getattr(usage, "cost", None)
+        if cost is None:
+            extra = getattr(usage, "model_extra", None) or {}
+            cost = extra.get("cost", 0)
+        await storage.add_usage(
+            tg_id,
+            model=getattr(resp, "model", settings.openrouter_model),
+            prompt_tokens=int(prompt),
+            completion_tokens=int(completion),
+            cost=float(cost or 0),
+        )
+    except Exception as exc:  # noqa: BLE001 — учёт не критичен
+        log.warning("Не удалось записать usage для %s: %s", tg_id, exc)
+
+
 @dataclass
 class HandoffData:
     name: str
@@ -84,7 +109,9 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
             messages=messages,
             tools=TOOLS,
             temperature=0.6,
+            extra_body={"usage": {"include": True}},
         )
+        await _record_usage(tg_id, resp)
         msg = resp.choices[0].message
 
         if not msg.tool_calls:

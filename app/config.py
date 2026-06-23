@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     widget_public_url: str = "https://144-31-108-55.sslip.io"
     widget_token: str = ""  # общий секрет, который виджет шлёт в запросах
 
+    # Админка (список диалогов, пользователей и стоимости)
+    admin_token: str = ""   # пароль для входа в /admin (если пусто — доступ открыт)
+    usd_rub_rate: float = 0  # курс USD→RUB для показа стоимости в рублях (0 — не показывать)
+
     # Прочее
     db_path: str = "data/bot.db"
     log_level: str = "INFO"

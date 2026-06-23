@@ -74,6 +74,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
 
 
 def build_app(bot: Bot) -> web.Application:
+    from app.admin_api import add_admin_routes
     from app.widget_api import add_widget_routes
 
     app = web.Application()
@@ -83,4 +84,5 @@ def build_app(bot: Bot) -> web.Application:
     app.router.add_post(settings.webhook_path.rstrip("/") + "/{scope_id}", handle_webhook)
     app.router.add_get("/health", lambda _r: web.Response(text="ok"))
     add_widget_routes(app)
+    add_admin_routes(app)
     return app
