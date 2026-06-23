@@ -124,6 +124,7 @@ class Catalog:
         budget_max: float | None = None,
         query: str | None = None,
         limit: int = 3,
+        exclude_urls: set[str] | None = None,
     ) -> list[Product]:
         """Подбор товаров по бюджету и текстовому запросу.
 
@@ -173,6 +174,15 @@ class Catalog:
             return (relevance, closeness)
 
         items.sort(key=score, reverse=True)
+
+        # Уже показанные товары — в конец, чтобы «ещё варианты» давали новое.
+        # Если новых не хватает на limit, добиваем ранее показанными (не возвращаем пусто).
+        if exclude_urls:
+            shown = {u.rstrip("/") for u in exclude_urls}
+            fresh = [p for p in items if p.url.rstrip("/") not in shown]
+            seen = [p for p in items if p.url.rstrip("/") in shown]
+            items = fresh + seen
+
         return items[:limit]
 
     async def known_urls(self) -> set[str]:

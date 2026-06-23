@@ -35,7 +35,8 @@ _PROMISE_RE = re.compile(
 )
 
 
-async def _guard_reply(tg_id: int, text: str, offered: list[Product]) -> str:
+async def _guard_reply(tg_id: int, text: str, offered: list[Product],
+                       exclude_urls: set[str] | None = None) -> str:
     """Защита от выдуманных товаров. Если в ответе есть ссылка на магазин,
     которой НЕТ среди реальных товаров каталога (модель сочинила URL или
     повторила фейк из истории диалога) — подменяем на реальный список.
@@ -48,7 +49,7 @@ async def _guard_reply(tg_id: int, text: str, offered: list[Product]) -> str:
     if all(u.rstrip("/") in valid for u in urls):
         return text  # все ссылки ведут на реальные товары
     log.warning("LLM выдал несуществующие ссылки для %s — заменяю реальными", tg_id)
-    products = offered or await catalog.search(limit=3)
+    products = offered or await catalog.search(limit=3, exclude_urls=exclude_urls)
     return _render_products(products) if products else text
 
 
@@ -119,12 +120,13 @@ class ConsultResult:
     handoff: HandoffData | None = None
 
 
-async def _run_search(args: dict) -> tuple[str, list[Product]]:
+async def _run_search(args: dict, exclude_urls: set[str] | None = None) -> tuple[str, list[Product]]:
     products = await catalog.search(
         budget_min=args.get("budget_min"),
         budget_max=args.get("budget_max"),
         query=args.get("query"),
         limit=3,
+        exclude_urls=exclude_urls,
     )
     if not products:
         return json.dumps({"products": [], "note": "ничего не найдено в этом бюджете"},
@@ -143,6 +145,13 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
+
+    # уже показанные товары — исключим из нового поиска, чтобы «ещё варианты»
+    # давали НОВЫЕ букеты, а не те же самые
+    shown_urls: set[str] = set()
+    for m in history:
+        for u in _SHOP_URL_RE.findall(m.get("content") or ""):
+            shown_urls.add(u.rstrip("/"))
 
     # товары из последнего вызова search_catalog — для проверки ответа модели
     offered: list[Product] = []
@@ -165,13 +174,14 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
             # и ход заканчивается без товаров. Форсируем реальный поиск и показываем
             # настоящие варианты, чтобы клиент не остался без ответа.
             if not did_search and not _SHOP_URL_RE.search(text) and _PROMISE_RE.search(text):
-                products = await catalog.search(query=user_text or None, limit=3)
+                products = await catalog.search(query=user_text or None, limit=3,
+                                                exclude_urls=shown_urls)
                 if products:
                     log.info("Модель пообещала, но не искала — форсирую поиск для %s", tg_id)
                     return ConsultResult(text=_render_products(products))
             # защита от галлюцинаций: ссылки на несуществующие товары (в т.ч.
             # повтор фейков из истории) подменяем реальным списком из каталога
-            text = await _guard_reply(tg_id, text, offered)
+            text = await _guard_reply(tg_id, text, offered, exclude_urls=shown_urls)
             return ConsultResult(text=text or "Извините, повторите, пожалуйста?")
 
         # есть вызовы инструментов — добавляем сообщение ассистента в контекст
@@ -201,7 +211,7 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
                 return ConsultResult(handoff=HandoffData.from_args(args))
 
             if name == "search_catalog":
-                result, offered = await _run_search(args)
+                result, offered = await _run_search(args, exclude_urls=shown_urls)
                 did_search = True
             else:
                 result = json.dumps({"error": f"unknown tool {name}"}, ensure_ascii=False)
