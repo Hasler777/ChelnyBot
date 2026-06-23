@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import time
 from dataclasses import dataclass
@@ -60,7 +61,7 @@ def _parse_product(raw: dict) -> Product | None:
         return None
     return Product(
         id=int(raw.get("id", 0)),
-        name=(raw.get("name") or "").strip(),
+        name=html.unescape((raw.get("name") or "").strip()),
         price=price,
         regular_price=regular,
         url=raw.get("permalink") or "",
