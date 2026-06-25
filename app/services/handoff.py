@@ -26,7 +26,6 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     # клиента всегда висели на одном контакте)
     user = await storage.get_user(tg_id)
     existing_contact_id = user.amo_contact_id if user else None
-    existing_lead_id = user.amo_lead_id if user else None
 
     lead_id: int | None = None
     contact_id: int | None = existing_contact_id
@@ -36,11 +35,13 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
             if existing_contact_id and (data.name or data.phone):
                 await amo.update_contact(existing_contact_id, name=data.name, phone=data.phone)
 
-            # Пока прошлая сделка ОТКРЫТА — продолжаем в ней: чат amoJo привязан
-            # именно к ней, а новая сделка осталась бы без панели переписки.
-            # Закрыта/нет прошлой — создаём новую.
-            if existing_lead_id and await amo.is_lead_open(existing_lead_id):
-                lead_id, contact_id = existing_lead_id, existing_contact_id
+            # Беседа amoJo живёт в самой ранней открытой сделке контакта и не
+            # переезжает. Продолжаем заявку именно в ней, чтобы переписка и сделка
+            # были вместе. Нет открытых сделок — создаём новую.
+            reuse_lead_id = (await amo.oldest_open_lead(existing_contact_id)
+                             if existing_contact_id else None)
+            if reuse_lead_id:
+                lead_id, contact_id = reuse_lead_id, existing_contact_id
                 await amo.update_lead(
                     lead_id,
                     product_name=data.product_name, product_url=data.product_url,

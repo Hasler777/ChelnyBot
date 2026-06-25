@@ -213,15 +213,25 @@ class AmoClient:
         except AmoError as exc:
             log.warning("Не удалось обновить контакт %s: %s", contact_id, exc)
 
-    async def is_lead_open(self, lead_id: int) -> bool:
-        """Открыта ли сделка (не закрыта/не удалена). При ошибке считаем закрытой,
-        чтобы на всякий случай создать новую."""
+    async def oldest_open_lead(self, contact_id: int) -> int | None:
+        """Самая ранняя ОТКРЫТАЯ сделка контакта. Беседа amoJo «садится» на первую
+        сделку, где открылся чат, и не переезжает — поэтому новые заявки кладём
+        именно туда, чтобы переписка и сделка были в одной карточке."""
         try:
-            lead = await self._request("GET", f"/api/v4/leads/{lead_id}")
+            c = await self.get(f"/api/v4/contacts/{contact_id}", params={"with": "leads"})
         except AmoError as exc:
-            log.warning("Не удалось получить сделку %s: %s", lead_id, exc)
-            return False
-        return not lead.get("closed_at") and not lead.get("is_deleted")
+            log.warning("Не удалось получить сделки контакта %s: %s", contact_id, exc)
+            return None
+        open_ids: list[int] = []
+        for l in c.get("_embedded", {}).get("leads", []):
+            lid = l.get("id")
+            try:
+                ld = await self.get(f"/api/v4/leads/{lid}")
+            except AmoError:
+                continue
+            if lid and not ld.get("closed_at") and not ld.get("is_deleted"):
+                open_ids.append(lid)
+        return min(open_ids) if open_ids else None  # min(id) = самая ранняя
 
     async def update_lead(self, lead_id: int, *, product_name: str, product_url: str,
                           price: float, budget: str, delivery: str) -> None:
