@@ -26,23 +26,48 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     # клиента всегда висели на одном контакте)
     user = await storage.get_user(tg_id)
     existing_contact_id = user.amo_contact_id if user else None
+    existing_lead_id = user.amo_lead_id if user else None
 
     lead_id: int | None = None
     contact_id: int | None = existing_contact_id
     if settings.amo_enabled:
         try:
-            lead_id, contact_id = await amo.create_lead(
-                name=data.name,
-                phone=data.phone,
-                product_name=data.product_name,
-                product_url=data.product_url,
-                price=data.price,
-                budget=data.budget,
-                delivery=data.delivery_method,
-                comment=data.comment,
-                contact_id=existing_contact_id,
-            )
-            log.info("Создана сделка amoCRM #%s для tg_id=%s", lead_id, tg_id)
+            # имя/телефон контакта могли поменяться — обновляем существующий контакт
+            if existing_contact_id and (data.name or data.phone):
+                await amo.update_contact(existing_contact_id, name=data.name, phone=data.phone)
+
+            # Пока прошлая сделка ОТКРЫТА — продолжаем в ней: чат amoJo привязан
+            # именно к ней, а новая сделка осталась бы без панели переписки.
+            # Закрыта/нет прошлой — создаём новую.
+            if existing_lead_id and await amo.is_lead_open(existing_lead_id):
+                lead_id, contact_id = existing_lead_id, existing_contact_id
+                await amo.update_lead(
+                    lead_id,
+                    product_name=data.product_name, product_url=data.product_url,
+                    price=data.price, budget=data.budget, delivery=data.delivery_method,
+                )
+                note = "Новая заявка от клиента"
+                if data.product_name:
+                    note += f": {data.product_name}"
+                    if data.price:
+                        note += f" — {int(data.price)} ₽"
+                if data.comment:
+                    note += f"\n{data.comment}"
+                await amo.add_note(lead_id, note)
+                log.info("Продолжаем в открытой сделке amoCRM #%s для tg_id=%s", lead_id, tg_id)
+            else:
+                lead_id, contact_id = await amo.create_lead(
+                    name=data.name,
+                    phone=data.phone,
+                    product_name=data.product_name,
+                    product_url=data.product_url,
+                    price=data.price,
+                    budget=data.budget,
+                    delivery=data.delivery_method,
+                    comment=data.comment,
+                    contact_id=existing_contact_id,
+                )
+                log.info("Создана сделка amoCRM #%s для tg_id=%s", lead_id, tg_id)
         except AmoError as exc:
             log.exception("Ошибка создания сделки в amoCRM: %s", exc)
     else:

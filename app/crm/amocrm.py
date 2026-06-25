@@ -169,6 +169,10 @@ class AmoClient:
         """
         if not contact_id:
             contact_id = await self._create_contact(name, phone)
+        # держим имя/телефон контакта актуальными — клиент мог назвать новое имя,
+        # а контакт переиспользуется (по contact_id или найден по телефону)
+        if name:
+            await self.update_contact(contact_id, name=name, phone=phone)
 
         lead_name = f"Заявка из Telegram: {product_name or 'букет'}"
         lead: dict = {
@@ -191,6 +195,52 @@ class AmoClient:
         if comment:
             await self._add_note(lead_id, comment)
         return lead_id, contact_id
+
+    async def update_contact(self, contact_id: int, *, name: str = "", phone: str = "") -> None:
+        """Обновить имя/телефон существующего контакта (клиент мог назваться иначе)."""
+        body: dict = {}
+        if name:
+            body["name"] = name
+        if phone and settings.amo_cf_contact_phone:
+            body["custom_fields_values"] = [{
+                "field_id": settings.amo_cf_contact_phone,
+                "values": [{"value": phone, "enum_code": "WORK"}],
+            }]
+        if not body:
+            return
+        try:
+            await self._request("PATCH", f"/api/v4/contacts/{contact_id}", json_body=body)
+        except AmoError as exc:
+            log.warning("Не удалось обновить контакт %s: %s", contact_id, exc)
+
+    async def is_lead_open(self, lead_id: int) -> bool:
+        """Открыта ли сделка (не закрыта/не удалена). При ошибке считаем закрытой,
+        чтобы на всякий случай создать новую."""
+        try:
+            lead = await self._request("GET", f"/api/v4/leads/{lead_id}")
+        except AmoError as exc:
+            log.warning("Не удалось получить сделку %s: %s", lead_id, exc)
+            return False
+        return not lead.get("closed_at") and not lead.get("is_deleted")
+
+    async def update_lead(self, lead_id: int, *, product_name: str, product_url: str,
+                          price: float, budget: str, delivery: str) -> None:
+        """Обновить поля открытой сделки под новую заявку того же клиента."""
+        body: dict = {}
+        if price:
+            body["price"] = int(price)
+        cf = self._lead_custom_fields(
+            product_name=product_name, product_url=product_url, price=price,
+            budget=budget, delivery=delivery,
+        )
+        if cf:
+            body["custom_fields_values"] = cf
+        if not body:
+            return
+        try:
+            await self._request("PATCH", f"/api/v4/leads/{lead_id}", json_body=body)
+        except AmoError as exc:
+            log.warning("Не удалось обновить сделку %s: %s", lead_id, exc)
 
     async def link_chat_to_contact(self, contact_id: int, chat_id: str) -> None:
         """Привязывает чат amoJo к контакту, чтобы входящее сообщение не плодило
