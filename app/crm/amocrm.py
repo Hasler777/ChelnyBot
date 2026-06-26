@@ -213,30 +213,32 @@ class AmoClient:
         except AmoError as exc:
             log.warning("Не удалось обновить контакт %s: %s", contact_id, exc)
 
-    async def oldest_open_lead(self, contact_id: int) -> int | None:
-        """Самая ранняя ОТКРЫТАЯ сделка контакта. Беседа amoJo «садится» на первую
-        сделку, где открылся чат, и не переезжает — поэтому новые заявки кладём
-        именно туда, чтобы переписка и сделка были в одной карточке."""
+    async def ensure_contact(self, *, name: str = "", phone: str = "",
+                             contact_id: int | None = None) -> int:
+        """Гарантировать контакт (один tg = один контакт) и держать имя/телефон
+        актуальными. Без создания сделки."""
+        if not contact_id:
+            contact_id = await self._create_contact(name, phone)
+        if name or phone:
+            await self.update_contact(contact_id, name=name, phone=phone)
+        return contact_id
+
+    async def contact_lead_ids(self, contact_id: int) -> set[int]:
+        """ID всех сделок контакта (чтобы поймать новую сделку, созданную чатом)."""
         try:
             c = await self.get(f"/api/v4/contacts/{contact_id}", params={"with": "leads"})
         except AmoError as exc:
             log.warning("Не удалось получить сделки контакта %s: %s", contact_id, exc)
-            return None
-        open_ids: list[int] = []
-        for l in c.get("_embedded", {}).get("leads", []):
-            lid = l.get("id")
-            try:
-                ld = await self.get(f"/api/v4/leads/{lid}")
-            except AmoError:
-                continue
-            if lid and not ld.get("closed_at") and not ld.get("is_deleted"):
-                open_ids.append(lid)
-        return min(open_ids) if open_ids else None  # min(id) = самая ранняя
+            return set()
+        return {l["id"] for l in c.get("_embedded", {}).get("leads", []) if l.get("id")}
 
-    async def update_lead(self, lead_id: int, *, product_name: str, product_url: str,
-                          price: float, budget: str, delivery: str) -> None:
-        """Обновить поля открытой сделки под новую заявку того же клиента."""
+    async def update_lead(self, lead_id: int, *, name: str = "", product_name: str = "",
+                          product_url: str = "", price: float = 0, budget: str = "",
+                          delivery: str = "") -> None:
+        """Обновить поля сделки (имя/цена/кастомные поля)."""
         body: dict = {}
+        if name:
+            body["name"] = name
         if price:
             body["price"] = int(price)
         cf = self._lead_custom_fields(
