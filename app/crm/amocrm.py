@@ -229,6 +229,26 @@ class AmoClient:
         except AmoError as exc:
             log.warning("Не удалось обновить контакт %s: %s", contact_id, exc)
 
+    async def ensure_contact(self, *, name: str = "", phone: str = "",
+                             contact_id: int | None = None) -> int:
+        """Гарантировать каноничный контакт БЕЗ создания сделки (сделку заведёт чат).
+
+        По телефону (последние 10 цифр) находим тот же контакт, что и дедуп amoCRM —
+        чтобы не плодить дубликат и не ловить склейку. Имя/телефон держим актуальными.
+        """
+        if phone:
+            contact_id = await self._create_contact(name, phone)  # найдёт по телефону или создаст
+        elif contact_id:
+            try:
+                await self.get(f"/api/v4/contacts/{contact_id}")
+            except AmoError:
+                contact_id = None
+        if not contact_id:
+            contact_id = await self._create_contact(name, phone)
+        if name:
+            await self.update_contact(contact_id, name=name, phone=phone)
+        return contact_id
+
     async def link_chat_to_contact(self, contact_id: int, chat_id: str) -> None:
         """Привязывает чат amoJo к контакту, чтобы входящее сообщение не плодило
         отдельную «неразобранную» сделку."""

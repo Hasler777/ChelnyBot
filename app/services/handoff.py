@@ -30,20 +30,23 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     contact_id: int | None = existing_contact_id
     if settings.amo_enabled:
         try:
-            lead_id, contact_id = await amo.create_lead(
-                name=data.name,
-                phone=data.phone,
-                product_name=data.product_name,
-                product_url=data.product_url,
-                price=data.price,
-                budget=data.budget,
-                delivery=data.delivery_method,
-                comment=data.comment,
-                contact_id=existing_contact_id,
-            )
-            log.info("Создана сделка amoCRM #%s для tg_id=%s", lead_id, tg_id)
+            if settings.amojo_enabled:
+                # Сделку создаёт САМ чат (как каналы VK/MAX/Instagram). Бот только
+                # готовит контакт — БЕЗ REST-сделки, иначе вышло бы 2 карточки.
+                # Каждый заказ = своя беседа/сделка; флорист принял → закрыл →
+                # следующее обращение клиента создаст новую сделку с чатом.
+                contact_id = await amo.ensure_contact(
+                    name=data.name, phone=data.phone, contact_id=existing_contact_id)
+            else:
+                lead_id, contact_id = await amo.create_lead(
+                    name=data.name, phone=data.phone, product_name=data.product_name,
+                    product_url=data.product_url, price=data.price, budget=data.budget,
+                    delivery=data.delivery_method, comment=data.comment,
+                    contact_id=existing_contact_id,
+                )
+                log.info("Создана сделка amoCRM #%s для tg_id=%s", lead_id, tg_id)
         except AmoError as exc:
-            log.exception("Ошибка создания сделки в amoCRM: %s", exc)
+            log.exception("Ошибка amoCRM при хэндофф: %s", exc)
     else:
         log.warning("amoCRM не настроен — сделка не создана (tg_id=%s)", tg_id)
 
