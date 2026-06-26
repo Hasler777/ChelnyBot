@@ -122,11 +122,15 @@ class AmoClient:
     # ---------- бизнес-операции ----------
     async def _create_contact(self, name: str, phone: str) -> int:
         # переиспользуем существующий контакт по телефону — не плодим дубликаты
-        # и сохраняем привязку чата у постоянного клиента
+        # и сохраняем привязку чата у постоянного клиента.
+        # Ищем по ПОСЛЕДНИМ 10 цифрам (нац. номер), как дедуп amoCRM: иначе «8 990…»
+        # не находит контакт с «+7 990…», бот создаёт новый, и amoCRM их склеивает —
+        # из-за чего слетает привязка беседы к карточке сделки.
         digits = "".join(ch for ch in phone if ch.isdigit()) if phone else ""
-        if digits:
+        search = digits[-10:] if len(digits) >= 10 else digits
+        if search:
             try:
-                found = await self._request("GET", "/api/v4/contacts", params={"query": digits})
+                found = await self._request("GET", "/api/v4/contacts", params={"query": search})
                 contacts = found.get("_embedded", {}).get("contacts", [])
                 if contacts:
                     return contacts[0]["id"]
@@ -167,10 +171,13 @@ class AmoClient:
         Если contact_id передан — переиспользуем его (один tg = один контакт),
         иначе ищем по телефону / создаём новый.
         """
-        # переданный contact_id мог устареть (например, после смены аккаунта amoCRM
-        # он принадлежит другому аккаунту) — тогда сделка создалась бы БЕЗ контакта,
-        # а чат завёл бы свой контакт и «Неразобранное» (дубль). Проверяем существование.
-        if contact_id:
+        # Берём КАНОНИЧНЫЙ контакт по телефону (так же, как дедуп amoCRM). Переданный
+        # contact_id на аккаунтах с автодублями мог стать «пустышкой» после склейки —
+        # тогда сделка создалась бы на ней/без контакта, а беседа уехала бы из карточки.
+        # Телефон стабильнее: по нему находим именно тот контакт, к которому привяжется чат.
+        if phone:
+            contact_id = await self._create_contact(name, phone)  # найдёт по телефону или создаст
+        elif contact_id:
             try:
                 await self.get(f"/api/v4/contacts/{contact_id}")
             except AmoError:
