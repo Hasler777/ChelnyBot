@@ -50,24 +50,24 @@ async def _usd_rub_rate() -> float:
         return _RATE_CACHE["value"] or 0.0
 
 
-def _check_token(token: str | None) -> bool:
+def _check(token: str | None, secret: str) -> bool:
     # если секрет не задан — доступ открыт (удобно для локальной отладки)
-    return not settings.admin_token or token == settings.admin_token
+    return not secret or token == secret
 
 
-async def api_users(request: web.Request) -> web.Response:
-    if not _check_token(request.query.get("token")):
-        return web.json_response({"error": "forbidden"}, status=403)
+async def _users_response(markup: float) -> web.Response:
     users = await storage.users_overview()
     totals = await storage.totals()
+    if markup and markup != 1.0:
+        for u in users:
+            u["cost"] = (u.get("cost") or 0) * markup
+        totals["cost"] = (totals.get("cost") or 0) * markup
     return web.json_response(
         {"users": users, "totals": totals, "usd_rub_rate": await _usd_rub_rate()}
     )
 
 
-async def api_dialog(request: web.Request) -> web.Response:
-    if not _check_token(request.query.get("token")):
-        return web.json_response({"error": "forbidden"}, status=403)
+async def _dialog_response(request: web.Request, markup: float) -> web.Response:
     try:
         tg_id = int(request.query.get("tg_id", ""))
     except ValueError:
@@ -76,6 +76,8 @@ async def api_dialog(request: web.Request) -> web.Response:
     user = await storage.get_user(tg_id)
     rows = await storage.history_full(tg_id, limit=1000)
     cost = await storage.dialog_cost(tg_id)
+    if markup and markup != 1.0:
+        cost = {**cost, "cost": (cost.get("cost") or 0) * markup}
     messages = [
         {"from": _ROLE_MAP.get(r["role"], r["role"]), "text": r["content"], "ts": r["ts"]}
         for r in rows
@@ -96,14 +98,52 @@ async def api_dialog(request: web.Request) -> web.Response:
     )
 
 
+# ---- наш кабинет (/admin): реальная стоимость ----
+async def api_users(request: web.Request) -> web.Response:
+    if not _check(request.query.get("token"), settings.admin_token):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return await _users_response(1.0)
+
+
+async def api_dialog(request: web.Request) -> web.Response:
+    if not _check(request.query.get("token"), settings.admin_token):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return await _dialog_response(request, 1.0)
+
+
+# ---- кабинет владельца (/owner): стоимость с наценкой ----
+async def owner_users(request: web.Request) -> web.Response:
+    if not _check(request.query.get("token"), settings.owner_token):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return await _users_response(settings.owner_cost_markup)
+
+
+async def owner_dialog(request: web.Request) -> web.Response:
+    if not _check(request.query.get("token"), settings.owner_token):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return await _dialog_response(request, settings.owner_cost_markup)
+
+
+def _page(api_base: str) -> web.Response:
+    return web.Response(text=_ADMIN_HTML.replace("__API_BASE__", api_base),
+                        content_type="text/html")
+
+
 async def get_admin_page(request: web.Request) -> web.Response:
-    return web.Response(text=_ADMIN_HTML, content_type="text/html")
+    return _page("/admin")
+
+
+async def get_owner_page(request: web.Request) -> web.Response:
+    return _page("/owner")
 
 
 def add_admin_routes(app: web.Application) -> None:
     app.router.add_get("/admin", get_admin_page)
     app.router.add_get("/admin/api/users", api_users)
     app.router.add_get("/admin/api/dialog", api_dialog)
+    app.router.add_get("/owner", get_owner_page)
+    app.router.add_get("/owner/api/users", owner_users)
+    app.router.add_get("/owner/api/dialog", owner_dialog)
 
 
 _ADMIN_HTML = """<!DOCTYPE html>
@@ -195,8 +235,9 @@ _ADMIN_HTML = """<!DOCTYPE html>
   </div>
 
 <script>
+const API = '__API_BASE__';
 const qs = new URLSearchParams(location.search);
-let token = qs.get('token') || localStorage.getItem('admin_token') || '';
+let token = qs.get('token') || localStorage.getItem(API + '_token') || '';
 let rate = 0;
 let data = [];
 let sortK = 'last_ts', sortDir = -1;
@@ -218,7 +259,7 @@ function esc(s){ const d=document.createElement('div'); d.textContent=s; return 
 
 async function loadUsers(){
   let r;
-  try { r = await fetch(`/admin/api/users?token=${encodeURIComponent(token)}`); }
+  try { r = await fetch(`${API}/api/users?token=${encodeURIComponent(token)}`); }
   catch(e){ document.getElementById('empty').textContent='Ошибка сети'; return; }
   if(r.status===403){ promptToken(); return; }
   const j = await r.json();
@@ -274,7 +315,7 @@ document.getElementById('search').oninput = render;
 async function openDialog(tgId){
   const ov=document.getElementById('overlay'); ov.classList.add('open');
   document.getElementById('log').innerHTML='<div id="empty">Загрузка…</div>';
-  const r = await fetch(`/admin/api/dialog?tg_id=${tgId}&token=${encodeURIComponent(token)}`);
+  const r = await fetch(`${API}/api/dialog?tg_id=${tgId}&token=${encodeURIComponent(token)}`);
   const j = await r.json();
   const u=j.user||{}, c=j.cost||{};
   document.getElementById('dname').textContent = u.name||'Без имени';
@@ -302,7 +343,7 @@ document.getElementById('overlay').onclick=e=>{ if(e.target.id==='overlay') e.cu
 
 function promptToken(){
   const t = prompt('Введите токен доступа (ADMIN_TOKEN):');
-  if(t){ token=t; localStorage.setItem('admin_token', t); loadUsers(); }
+  if(t){ token=t; localStorage.setItem(API + '_token', t); loadUsers(); }
   else document.getElementById('empty').textContent='Доступ запрещён';
 }
 
