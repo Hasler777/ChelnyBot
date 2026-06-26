@@ -167,6 +167,15 @@ class AmoClient:
         Если contact_id передан — переиспользуем его (один tg = один контакт),
         иначе ищем по телефону / создаём новый.
         """
+        # переданный contact_id мог устареть (например, после смены аккаунта amoCRM
+        # он принадлежит другому аккаунту) — тогда сделка создалась бы БЕЗ контакта,
+        # а чат завёл бы свой контакт и «Неразобранное» (дубль). Проверяем существование.
+        if contact_id:
+            try:
+                await self.get(f"/api/v4/contacts/{contact_id}")
+            except AmoError:
+                log.warning("contact_id=%s не найден в аккаунте — создаём новый", contact_id)
+                contact_id = None
         if not contact_id:
             contact_id = await self._create_contact(name, phone)
         # держим имя/телефон контакта актуальными — клиент мог назвать новое имя,
@@ -212,47 +221,6 @@ class AmoClient:
             await self._request("PATCH", f"/api/v4/contacts/{contact_id}", json_body=body)
         except AmoError as exc:
             log.warning("Не удалось обновить контакт %s: %s", contact_id, exc)
-
-    async def ensure_contact(self, *, name: str = "", phone: str = "",
-                             contact_id: int | None = None) -> int:
-        """Гарантировать контакт (один tg = один контакт) и держать имя/телефон
-        актуальными. Без создания сделки."""
-        if not contact_id:
-            contact_id = await self._create_contact(name, phone)
-        if name or phone:
-            await self.update_contact(contact_id, name=name, phone=phone)
-        return contact_id
-
-    async def contact_lead_ids(self, contact_id: int) -> set[int]:
-        """ID всех сделок контакта (чтобы поймать новую сделку, созданную чатом)."""
-        try:
-            c = await self.get(f"/api/v4/contacts/{contact_id}", params={"with": "leads"})
-        except AmoError as exc:
-            log.warning("Не удалось получить сделки контакта %s: %s", contact_id, exc)
-            return set()
-        return {l["id"] for l in c.get("_embedded", {}).get("leads", []) if l.get("id")}
-
-    async def update_lead(self, lead_id: int, *, name: str = "", product_name: str = "",
-                          product_url: str = "", price: float = 0, budget: str = "",
-                          delivery: str = "") -> None:
-        """Обновить поля сделки (имя/цена/кастомные поля)."""
-        body: dict = {}
-        if name:
-            body["name"] = name
-        if price:
-            body["price"] = int(price)
-        cf = self._lead_custom_fields(
-            product_name=product_name, product_url=product_url, price=price,
-            budget=budget, delivery=delivery,
-        )
-        if cf:
-            body["custom_fields_values"] = cf
-        if not body:
-            return
-        try:
-            await self._request("PATCH", f"/api/v4/leads/{lead_id}", json_body=body)
-        except AmoError as exc:
-            log.warning("Не удалось обновить сделку %s: %s", lead_id, exc)
 
     async def link_chat_to_contact(self, contact_id: int, chat_id: str) -> None:
         """Привязывает чат amoJo к контакту, чтобы входящее сообщение не плодило
