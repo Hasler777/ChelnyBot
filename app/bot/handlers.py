@@ -34,9 +34,11 @@ async def on_start(message: Message) -> None:
     tg_id = message.from_user.id
     await storage.get_or_create_user(tg_id)
     # новый старт — возвращаем диалог боту и чистим историю (свежий контекст,
-    # без устаревших/ошибочных товаров из прошлых сообщений)
+    # без устаревших/ошибочных товаров из прошлых сообщений). Расход тоже чистим,
+    # чтобы стоимость соответствовала видимой переписке, а не копилась за все сессии.
     await storage.update_user(tg_id, state=STATE_CONSULT)
     await storage.clear_messages(tg_id)
+    await storage.clear_usage(tg_id)
     await message.answer(GREETING)
     # фиксируем приветствие в истории, чтобы LLM не здоровался повторно
     await storage.add_message(tg_id, "assistant", GREETING)

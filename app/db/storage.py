@@ -171,6 +171,12 @@ class Storage:
         await self.db.execute("DELETE FROM messages WHERE tg_id = ?", (tg_id,))
         await self.db.commit()
 
+    async def clear_usage(self, tg_id: int) -> None:
+        """Очистить расход токенов диалога — чтобы стоимость соответствовала
+        видимой переписке (вызывается на /start вместе с очисткой сообщений)."""
+        await self.db.execute("DELETE FROM usage WHERE tg_id = ?", (tg_id,))
+        await self.db.commit()
+
     async def add_message(self, tg_id: int, role: str, content: str) -> None:
         await self.db.execute(
             "INSERT INTO messages (tg_id, role, content, ts) VALUES (?, ?, ?, ?)",
