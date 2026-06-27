@@ -85,6 +85,7 @@ class Storage:
             "ALTER TABLE users ADD COLUMN amo_last_note_id INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN amo_contact_id INTEGER",
             "ALTER TABLE users ADD COLUMN context_since REAL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN reminder_sent REAL DEFAULT 0",
         ):
             try:
                 await self._db.execute(ddl)
@@ -184,6 +185,12 @@ class Storage:
             "INSERT INTO messages (tg_id, role, content, ts) VALUES (?, ?, ?, ?)",
             (tg_id, role, content, time.time()),
         )
+        # клиент снова написал — снимаем метку напоминания, чтобы при новой
+        # паузе бот смог напомнить ещё раз
+        if role == "user":
+            await self.db.execute(
+                "UPDATE users SET reminder_sent = 0 WHERE tg_id = ?", (tg_id,)
+            )
         await self.db.commit()
 
     async def add_raw_message(self, tg_id: int, role: str, payload: dict) -> None:
@@ -226,6 +233,45 @@ class Storage:
             {"id": r["id"], "role": r["role"], "content": r["content"], "ts": r["ts"]}
             for r in reversed(rows)
         ]
+
+    # ---------- напоминания при молчании ----------
+    async def users_to_remind(
+        self, idle_seconds: float, max_idle_seconds: float
+    ) -> list[int]:
+        """tg_id клиентов, которым пора напомнить: в режиме бота (consult),
+        напоминание ещё не отправлено, последнее сообщение — от бота (assistant),
+        и пауза в диапазоне [idle_seconds, max_idle_seconds].
+
+        Верхняя граница нужна, чтобы после рестарта не пинговать старые диалоги
+        (давно молчащие чаты в окно не попадают)."""
+        now = time.time()
+        lo = now - max_idle_seconds  # последнее сообщение не раньше этого
+        hi = now - idle_seconds      # и не позже этого
+        cur = await self.db.execute(
+            """
+            SELECT u.tg_id AS tg_id,
+                   (SELECT m.role FROM messages m WHERE m.tg_id = u.tg_id
+                    ORDER BY m.id DESC LIMIT 1) AS last_role,
+                   (SELECT MAX(m.ts) FROM messages m WHERE m.tg_id = u.tg_id) AS last_ts
+            FROM users u
+            WHERE u.state = ? AND COALESCE(u.reminder_sent, 0) = 0
+            """,
+            (STATE_CONSULT,),
+        )
+        rows = await cur.fetchall()
+        return [
+            r["tg_id"]
+            for r in rows
+            if r["last_role"] == "assistant"
+            and r["last_ts"] is not None
+            and lo <= r["last_ts"] <= hi
+        ]
+
+    async def mark_reminded(self, tg_id: int) -> None:
+        await self.db.execute(
+            "UPDATE users SET reminder_sent = ? WHERE tg_id = ?", (time.time(), tg_id)
+        )
+        await self.db.commit()
 
     # ---------- usage / стоимость ----------
     async def add_usage(

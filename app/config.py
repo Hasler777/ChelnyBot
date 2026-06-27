@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # Данные остаются в БД и видны в /admin; в /owner строки и их вклад в итоги скрыты.
     owner_hidden_tg_ids: str = ""
 
+    # Напоминание клиенту при молчании: если после ответа бота человек ничего
+    # не пишет N минут — бот сам присылает мягкий пинг (один раз за паузу).
+    reminder_enabled: bool = True
+    reminder_idle_minutes: float = 10.0  # сколько молчать до напоминания
+
     # Прочее
     db_path: str = "data/bot.db"
     log_level: str = "INFO"

@@ -11,6 +11,7 @@ from app.bot.handlers import router
 from app.config import settings
 from app.crm.webhook import build_app
 from app.db.storage import storage
+from app.services.reminder import run_reminder_loop
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -38,11 +39,13 @@ async def main() -> None:
     dp.include_router(router)
 
     runner = await _run_webhook_server(bot)
+    reminder_task = asyncio.create_task(run_reminder_loop(bot))
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         log.info("Запуск polling…")
         await dp.start_polling(bot)
     finally:
+        reminder_task.cancel()
         await runner.cleanup()
         await storage.close()
         await bot.session.close()
