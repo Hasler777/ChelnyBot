@@ -76,8 +76,9 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
                         # привязка не критична — сообщение всё равно отправим
                         log.warning("Привязка чата к контакту не удалась (продолжаем): %s", exc)
             client_name = data.name or "Клиент"
-            # вся переписка клиента с ботом — чтобы у менеджера был полный контекст
-            history = await storage.history_full(tg_id, limit=80)
+            # транскрипт флористу — переписка текущего заказа (с последнего /start)
+            since = user.context_since if user else 0
+            history = await storage.history_full(tg_id, limit=80, since=since)
             role_names = {"user": "Клиент", "assistant": "Соня", "manager": "Менеджер"}
             dialog_lines = [
                 f"{role_names.get(r['role'], r['role'])}: {r['content']}"

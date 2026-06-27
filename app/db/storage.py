@@ -30,6 +30,7 @@ class User:
     amojo_chat_id: str | None
     amo_contact_id: int | None = None
     amo_last_note_id: int = 0
+    context_since: float = 0.0  # с какого времени брать сообщения в контекст LLM (метка /start)
 
 
 _SCHEMA = """
@@ -42,6 +43,7 @@ CREATE TABLE IF NOT EXISTS users (
     amojo_conversation_id TEXT,
     amojo_chat_id TEXT,
     amo_contact_id INTEGER,
+    context_since REAL DEFAULT 0,
     created_at REAL,
     updated_at REAL
 );
@@ -82,6 +84,7 @@ class Storage:
         for ddl in (
             "ALTER TABLE users ADD COLUMN amo_last_note_id INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN amo_contact_id INTEGER",
+            "ALTER TABLE users ADD COLUMN context_since REAL DEFAULT 0",
         ):
             try:
                 await self._db.execute(ddl)
@@ -163,18 +166,17 @@ class Storage:
             amojo_chat_id=row["amojo_chat_id"],
             amo_contact_id=row["amo_contact_id"] if "amo_contact_id" in keys else None,
             amo_last_note_id=row["amo_last_note_id"] if "amo_last_note_id" in keys else 0,
+            context_since=row["context_since"] if "context_since" in keys else 0.0,
         )
 
     # ---------- messages ----------
-    async def clear_messages(self, tg_id: int) -> None:
-        """Очистить историю диалога (например, при /start — начать заново)."""
-        await self.db.execute("DELETE FROM messages WHERE tg_id = ?", (tg_id,))
-        await self.db.commit()
-
-    async def clear_usage(self, tg_id: int) -> None:
-        """Очистить расход токенов диалога — чтобы стоимость соответствовала
-        видимой переписке (вызывается на /start вместе с очисткой сообщений)."""
-        await self.db.execute("DELETE FROM usage WHERE tg_id = ?", (tg_id,))
+    async def mark_session_start(self, tg_id: int) -> None:
+        """Отметка нового диалога (/start): бот будет брать в контекст только
+        сообщения ПОСЛЕ этой метки. Саму переписку и расход НЕ удаляем —
+        они полностью хранятся для админки."""
+        await self.db.execute(
+            "UPDATE users SET context_since = ? WHERE tg_id = ?", (time.time(), tg_id)
+        )
         await self.db.commit()
 
     async def add_message(self, tg_id: int, role: str, content: str) -> None:
@@ -193,9 +195,17 @@ class Storage:
         await self.db.commit()
 
     async def history(self, tg_id: int, limit: int = 20) -> list[dict]:
+        """Контекст для LLM — только сообщения ТЕКУЩЕЙ сессии (после последнего
+        /start). Вся переписка при этом остаётся в БД для админки."""
         cur = await self.db.execute(
-            "SELECT role, content FROM messages WHERE tg_id = ? ORDER BY id DESC LIMIT ?",
-            (tg_id, limit),
+            "SELECT context_since FROM users WHERE tg_id = ?", (tg_id,)
+        )
+        row = await cur.fetchone()
+        since = (row["context_since"] if row and row["context_since"] else 0) or 0
+        cur = await self.db.execute(
+            "SELECT role, content FROM messages WHERE tg_id = ? AND ts >= ? "
+            "ORDER BY id DESC LIMIT ?",
+            (tg_id, since, limit),
         )
         rows = await cur.fetchall()
         out: list[dict] = []
@@ -203,12 +213,13 @@ class Storage:
             out.append({"role": row["role"], "content": row["content"]})
         return out
 
-    async def history_full(self, tg_id: int, limit: int = 200) -> list[dict]:
-        """История с временем и id — для отображения в виджете amoCRM."""
+    async def history_full(self, tg_id: int, limit: int = 200, since: float = 0) -> list[dict]:
+        """Полная история с временем и id (для админки). since>0 — только текущая
+        сессия (например, транскрипт заказа флористу)."""
         cur = await self.db.execute(
-            "SELECT id, role, content, ts FROM messages WHERE tg_id = ? "
+            "SELECT id, role, content, ts FROM messages WHERE tg_id = ? AND ts >= ? "
             "ORDER BY id DESC LIMIT ?",
-            (tg_id, limit),
+            (tg_id, since, limit),
         )
         rows = await cur.fetchall()
         return [
