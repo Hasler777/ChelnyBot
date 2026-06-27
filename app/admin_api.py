@@ -55,9 +55,21 @@ def _check(token: str | None, secret: str) -> bool:
     return not secret or token == secret
 
 
-async def _users_response(markup: float) -> web.Response:
+async def _users_response(markup: float, hidden: set[int] | None = None) -> web.Response:
     users = await storage.users_overview()
-    totals = await storage.totals()
+    if hidden:
+        # скрываем тестовые аккаунты из кабинета владельца и пересчитываем итоги
+        # только по видимым клиентам (в /admin фильтр не применяется)
+        users = [u for u in users if u["tg_id"] not in hidden]
+        totals = {
+            "users": len(users),
+            "messages": sum(u.get("msg_count") or 0 for u in users),
+            "tokens": sum(u.get("tokens") or 0 for u in users),
+            "calls": sum(u.get("llm_calls") or 0 for u in users),
+            "cost": sum(u.get("cost") or 0 for u in users),
+        }
+    else:
+        totals = await storage.totals()
     if markup and markup != 1.0:
         for u in users:
             u["cost"] = (u.get("cost") or 0) * markup
@@ -115,18 +127,26 @@ async def api_dialog(request: web.Request) -> web.Response:
 async def owner_users(request: web.Request) -> web.Response:
     if not _check(request.query.get("token"), settings.owner_token):
         return web.json_response({"error": "forbidden"}, status=403)
-    return await _users_response(settings.owner_cost_markup)
+    return await _users_response(settings.owner_cost_markup, settings.owner_hidden_ids)
 
 
 async def owner_dialog(request: web.Request) -> web.Response:
     if not _check(request.query.get("token"), settings.owner_token):
         return web.json_response({"error": "forbidden"}, status=403)
+    # скрытые из /owner клиенты не открываются и по прямой ссылке
+    try:
+        tg_id = int(request.query.get("tg_id", ""))
+    except ValueError:
+        return web.json_response({"error": "bad tg_id"}, status=400)
+    if tg_id in settings.owner_hidden_ids:
+        return web.json_response({"error": "not found"}, status=404)
     return await _dialog_response(request, settings.owner_cost_markup)
 
 
-def _page(api_base: str) -> web.Response:
-    return web.Response(text=_ADMIN_HTML.replace("__API_BASE__", api_base),
-                        content_type="text/html")
+def _page(api_base: str, show_tokens: bool = True) -> web.Response:
+    html = (_ADMIN_HTML.replace("__API_BASE__", api_base)
+                       .replace("__SHOW_TOKENS__", "true" if show_tokens else "false"))
+    return web.Response(text=html, content_type="text/html")
 
 
 async def get_admin_page(request: web.Request) -> web.Response:
@@ -134,7 +154,7 @@ async def get_admin_page(request: web.Request) -> web.Response:
 
 
 async def get_owner_page(request: web.Request) -> web.Response:
-    return _page("/owner")
+    return _page("/owner", show_tokens=False)
 
 
 def add_admin_routes(app: web.Application) -> None:
@@ -197,6 +217,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .manager .bubble { background:var(--acc); color:#fff; border-bottom-right-radius:4px; }
   .meta { font-size:10px; opacity:.6; margin:0 4px 2px; }
   #empty { color:var(--mut); text-align:center; padding:40px 0; }
+  .no-tokens .col-tokens { display:none; }
 </style>
 </head>
 <body>
@@ -213,7 +234,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
         <th data-k="state">Статус</th>
         <th data-k="msg_count" class="num">Сообщений</th>
         <th data-k="llm_calls" class="num">Запросов</th>
-        <th data-k="tokens" class="num">Токенов</th>
+        <th data-k="tokens" class="num col-tokens">Токенов</th>
         <th data-k="cost" class="num">Стоимость</th>
         <th data-k="last_ts" class="num">Активность</th>
       </tr></thead>
@@ -236,6 +257,8 @@ _ADMIN_HTML = """<!DOCTYPE html>
 
 <script>
 const API = '__API_BASE__';
+const SHOW_TOKENS = __SHOW_TOKENS__;
+if(!SHOW_TOKENS) document.documentElement.classList.add('no-tokens');
 const qs = new URLSearchParams(location.search);
 let token = qs.get('token') || localStorage.getItem(API + '_token') || '';
 let rate = 0;
@@ -275,7 +298,7 @@ function renderStats(t){
     ['Пользователей', t.users],
     ['Сообщений', t.messages],
     ['LLM-запросов', t.calls],
-    ['Токенов', (t.tokens||0).toLocaleString('ru-RU')],
+    ...(SHOW_TOKENS ? [['Токенов', (t.tokens||0).toLocaleString('ru-RU')]] : []),
     ['Затраты всего', money(t.cost)],
   ].map(([s,v])=>`<div class="stat"><b>${v}</b><span>${s}</span></div>`).join('');
 }
@@ -300,7 +323,7 @@ function render(){
       <td><span class="badge ${u.state}">${u.state==='handoff'?'у флориста':'бот'}</span></td>
       <td class="num">${u.msg_count||0}</td>
       <td class="num">${u.llm_calls||0}</td>
-      <td class="num">${(u.tokens||0).toLocaleString('ru-RU')}</td>
+      <td class="num col-tokens">${(u.tokens||0).toLocaleString('ru-RU')}</td>
       <td class="num cost">${money(u.cost)}</td>
       <td class="num muted">${fmt(u.last_ts)}</td>
     </tr>`).join('');
@@ -322,7 +345,7 @@ async function openDialog(tgId){
   document.getElementById('dsub').innerHTML = `id ${u.tg_id}${u.phone?' · '+esc(u.phone):''}${u.amo_lead_id?' · сделка #'+u.amo_lead_id:''}`;
   document.getElementById('dcost').innerHTML = [
     ['Стоимость диалога', money(c.cost)],
-    ['Токенов', (c.tokens||0).toLocaleString('ru-RU')],
+    ...(SHOW_TOKENS ? [['Токенов', (c.tokens||0).toLocaleString('ru-RU')]] : []),
     ['LLM-запросов', c.calls||0],
   ].map(([s,v])=>`<div><span class="muted">${s}</span><b>${v}</b></div>`).join('');
   const log=document.getElementById('log');
