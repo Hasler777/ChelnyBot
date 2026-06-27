@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     # Коэффициент НЕ отображается в интерфейсе, просто стоимость умножается.
     owner_token: str = ""        # пароль для входа в /owner
     owner_cost_markup: float = 12.0  # множитель стоимости (подбирается под целевую цену запроса)
+    # Клиенты, скрытые из кабинета владельца (тестовые аккаунты): CSV их tg_id.
+    # Данные остаются в БД и видны в /admin; в /owner строки и их вклад в итоги скрыты.
+    owner_hidden_tg_ids: str = ""
 
     # Прочее
     db_path: str = "data/bot.db"
@@ -87,6 +90,19 @@ class Settings(BaseSettings):
         if v in ("", None):
             return None
         return v
+
+    @property
+    def owner_hidden_ids(self) -> set[int]:
+        """tg_id клиентов, которых не показываем в /owner (парсинг CSV из .env)."""
+        out: set[int] = set()
+        for part in self.owner_hidden_tg_ids.replace(";", ",").split(","):
+            part = part.strip()
+            if part:
+                try:
+                    out.add(int(part))
+                except ValueError:
+                    pass
+        return out
 
     @property
     def amo_enabled(self) -> bool:
