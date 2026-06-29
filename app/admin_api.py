@@ -345,19 +345,7 @@ function renderWallet(w){
     <div class="wmeta">
       <div>Пополнено: ${rub(w.balance)}</div>
       <div>Списано: ${rub(w.spent)}</div>
-    </div>
-    <button id="topup">Пополнить</button>`;
-  document.getElementById('topup').onclick = topup;
-}
-
-async function topup(){
-  const s = prompt('Сумма пополнения, ₽ (отрицательная — корректировка/списание):');
-  if(s === null) return;
-  const amount = parseFloat(String(s).replace(',', '.').replace(/[^0-9.\-]/g, ''));
-  if(!isFinite(amount) || amount === 0){ alert('Введите сумму числом'); return; }
-  const r = await fetch(`${API}/api/wallet/topup?token=${encodeURIComponent(token)}&amount=${amount}`, {method:'POST'});
-  if(!r.ok){ alert('Не удалось пополнить'); return; }
-  loadUsers();
+    </div>`;
 }
 
 function renderStats(t){
