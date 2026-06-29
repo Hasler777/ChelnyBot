@@ -55,7 +55,9 @@ def _check(token: str | None, secret: str) -> bool:
     return not secret or token == secret
 
 
-async def _users_response(markup: float, hidden: set[int] | None = None) -> web.Response:
+async def _users_response(
+    markup: float, hidden: set[int] | None = None, with_wallet: bool = False
+) -> web.Response:
     users = await storage.users_overview()
     if hidden:
         # скрываем тестовые аккаунты из кабинета владельца и пересчитываем итоги
@@ -74,9 +76,18 @@ async def _users_response(markup: float, hidden: set[int] | None = None) -> web.
         for u in users:
             u["cost"] = (u.get("cost") or 0) * markup
         totals["cost"] = (totals.get("cost") or 0) * markup
-    return web.json_response(
-        {"users": users, "totals": totals, "usd_rub_rate": await _usd_rub_rate()}
-    )
+    rate = await _usd_rub_rate()
+    payload = {"users": users, "totals": totals, "usd_rub_rate": rate}
+    if with_wallet:
+        # кошелёк ведётся в рублях; списано = расход (с наценкой, в USD) по курсу
+        balance = await storage.wallet_balance()
+        spent = (totals.get("cost") or 0) * rate
+        payload["wallet"] = {
+            "balance": balance,
+            "spent": spent,
+            "remaining": balance - spent,
+        }
+    return web.json_response(payload)
 
 
 async def _dialog_response(request: web.Request, markup: float) -> web.Response:
@@ -127,7 +138,9 @@ async def api_dialog(request: web.Request) -> web.Response:
 async def owner_users(request: web.Request) -> web.Response:
     if not _check(request.query.get("token"), settings.owner_token):
         return web.json_response({"error": "forbidden"}, status=403)
-    return await _users_response(settings.owner_cost_markup, settings.owner_hidden_ids)
+    return await _users_response(
+        settings.owner_cost_markup, settings.owner_hidden_ids, with_wallet=True
+    )
 
 
 async def owner_dialog(request: web.Request) -> web.Response:
@@ -143,9 +156,23 @@ async def owner_dialog(request: web.Request) -> web.Response:
     return await _dialog_response(request, settings.owner_cost_markup)
 
 
-def _page(api_base: str, show_tokens: bool = True) -> web.Response:
+async def owner_wallet_topup(request: web.Request) -> web.Response:
+    """Пополнение/корректировка виртуального кошелька (в рублях)."""
+    if not _check(request.query.get("token"), settings.owner_token):
+        return web.json_response({"error": "forbidden"}, status=403)
+    try:
+        amount = float(request.query.get("amount", ""))
+    except ValueError:
+        return web.json_response({"error": "bad amount"}, status=400)
+    note = request.query.get("note", "")
+    balance = await storage.wallet_topup(amount, note)
+    return web.json_response({"balance": balance})
+
+
+def _page(api_base: str, show_tokens: bool = True, show_wallet: bool = False) -> web.Response:
     html = (_ADMIN_HTML.replace("__API_BASE__", api_base)
-                       .replace("__SHOW_TOKENS__", "true" if show_tokens else "false"))
+                       .replace("__SHOW_TOKENS__", "true" if show_tokens else "false")
+                       .replace("__SHOW_WALLET__", "true" if show_wallet else "false"))
     return web.Response(text=html, content_type="text/html")
 
 
@@ -154,7 +181,7 @@ async def get_admin_page(request: web.Request) -> web.Response:
 
 
 async def get_owner_page(request: web.Request) -> web.Response:
-    return _page("/owner", show_tokens=False)
+    return _page("/owner", show_tokens=False, show_wallet=True)
 
 
 def add_admin_routes(app: web.Application) -> None:
@@ -164,6 +191,7 @@ def add_admin_routes(app: web.Application) -> None:
     app.router.add_get("/owner", get_owner_page)
     app.router.add_get("/owner/api/users", owner_users)
     app.router.add_get("/owner/api/dialog", owner_dialog)
+    app.router.add_post("/owner/api/wallet/topup", owner_wallet_topup)
 
 
 _ADMIN_HTML = """<!DOCTYPE html>
@@ -184,6 +212,13 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .stat b { font-size:16px; }
   .stat span { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
   #search { margin-left:auto; background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--txt); padding:8px 12px; font-size:13px; min-width:200px; }
+  .wallet { display:flex; align-items:center; gap:16px; background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:10px 16px; }
+  .wallet .wrem { font-size:20px; font-weight:700; color:#7ee2a8; line-height:1.1; }
+  .wallet .wrem.neg { color:#f08a8a; }
+  .wallet .wlabel { display:block; font-size:10px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .wallet .wmeta { font-size:11px; color:var(--mut); display:flex; flex-direction:column; gap:2px; }
+  .wallet #topup { background:var(--acc); border:0; color:#fff; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+  .wallet #topup:hover { filter:brightness(1.1); }
   main { padding:16px 20px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); }
@@ -224,6 +259,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
   <header>
     <h1>🌷 Соня · диалоги</h1>
     <div class="stats" id="stats"></div>
+    <div class="wallet" id="wallet" style="display:none"></div>
     <input id="search" placeholder="Поиск по имени / телефону / id…">
   </header>
   <main>
@@ -258,6 +294,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
 <script>
 const API = '__API_BASE__';
 const SHOW_TOKENS = __SHOW_TOKENS__;
+const SHOW_WALLET = __SHOW_WALLET__;
 if(!SHOW_TOKENS) document.documentElement.classList.add('no-tokens');
 const qs = new URLSearchParams(location.search);
 let token = qs.get('token') || localStorage.getItem(API + '_token') || '';
@@ -289,7 +326,38 @@ async function loadUsers(){
   rate = j.usd_rub_rate || 0;
   data = j.users || [];
   renderStats(j.totals);
+  renderWallet(j.wallet);
   render();
+}
+
+function rub(x){ x = x || 0; const v = Math.abs(x) >= 100 ? Math.round(x).toLocaleString('ru-RU') : x.toFixed(2); return v + ' ₽'; }
+
+function renderWallet(w){
+  const el = document.getElementById('wallet');
+  if(!SHOW_WALLET || !w){ if(el) el.style.display='none'; return; }
+  el.style.display = 'flex';
+  const low = (w.remaining || 0) <= 0;
+  el.innerHTML = `
+    <div>
+      <span class="wlabel">Остаток на счёте</span>
+      <span class="wrem ${low?'neg':''}">${rub(w.remaining)}</span>
+    </div>
+    <div class="wmeta">
+      <div>Пополнено: ${rub(w.balance)}</div>
+      <div>Списано: ${rub(w.spent)}</div>
+    </div>
+    <button id="topup">Пополнить</button>`;
+  document.getElementById('topup').onclick = topup;
+}
+
+async function topup(){
+  const s = prompt('Сумма пополнения, ₽ (отрицательная — корректировка/списание):');
+  if(s === null) return;
+  const amount = parseFloat(String(s).replace(',', '.').replace(/[^0-9.\-]/g, ''));
+  if(!isFinite(amount) || amount === 0){ alert('Введите сумму числом'); return; }
+  const r = await fetch(`${API}/api/wallet/topup?token=${encodeURIComponent(token)}&amount=${amount}`, {method:'POST'});
+  if(!r.ok){ alert('Не удалось пополнить'); return; }
+  loadUsers();
 }
 
 function renderStats(t){

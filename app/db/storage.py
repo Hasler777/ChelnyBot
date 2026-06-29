@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS usage (
     cost REAL NOT NULL DEFAULT 0,
     ts REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS wallet (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    amount REAL NOT NULL,        -- пополнение в рублях (отрицательное = корректировка)
+    note TEXT,
+    ts REAL NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_tg ON messages(tg_id, id);
 CREATE INDEX IF NOT EXISTS idx_users_conv ON users(amojo_conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_tg ON usage(tg_id);
@@ -336,6 +342,23 @@ class Storage:
             "tokens": row["tokens"],
             "calls": row["calls"],
         }
+
+    # ---------- кошелёк владельца (виртуальный баланс в рублях) ----------
+    async def wallet_balance(self) -> float:
+        """Сумма всех пополнений (за вычетом ручных корректировок), в рублях."""
+        cur = await self.db.execute("SELECT COALESCE(SUM(amount), 0) AS bal FROM wallet")
+        row = await cur.fetchone()
+        return float(row["bal"] or 0.0)
+
+    async def wallet_topup(self, amount: float, note: str = "") -> float:
+        """Пополнить (amount>0) или скорректировать (amount<0) баланс. Возвращает
+        новый баланс."""
+        await self.db.execute(
+            "INSERT INTO wallet (amount, note, ts) VALUES (?, ?, ?)",
+            (amount, note, time.time()),
+        )
+        await self.db.commit()
+        return await self.wallet_balance()
 
     async def dialog_cost(self, tg_id: int) -> dict:
         """Стоимость и расход токенов одного диалога."""
