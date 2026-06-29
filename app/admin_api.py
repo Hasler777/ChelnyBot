@@ -199,7 +199,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Соня · Админка</title>
+<title>ЦветоМир · Админка</title>
 <style>
   :root { --bg:#0f141b; --panel:#171e27; --panel2:#1f2733; --line:#2b3947; --txt:#e6edf3; --mut:#9fb3c8; --acc:#2f6feb; }
   * { box-sizing:border-box; }
@@ -257,7 +257,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>🌷 Соня · диалоги</h1>
+    <h1>🌷 ЦветоМир · диалоги</h1>
     <div class="stats" id="stats"></div>
     <div class="wallet" id="wallet" style="display:none"></div>
     <input id="search" placeholder="Поиск по имени / телефону / id…">
