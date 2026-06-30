@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
+import base64
 import logging
+import os
 import time
 
 import aiohttp
@@ -19,6 +21,21 @@ from app.config import settings
 from app.db.storage import storage
 
 log = logging.getLogger(__name__)
+
+
+def _logo_data_uri() -> str:
+    """Логотип ЦветоМира как data-URI (встраиваем прямо в HTML, без статик-роутов)."""
+    path = os.path.join(os.path.dirname(__file__), "static", "logo.webp")
+    try:
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return f"data:image/webp;base64,{b64}"
+    except OSError as exc:  # noqa: BLE001 — если файла нет, шапка просто без лого
+        log.warning("Не удалось загрузить логотип: %s", exc)
+        return ""
+
+
+_LOGO_URI = _logo_data_uri()
 
 _ROLE_MAP = {"user": "client", "assistant": "bot", "manager": "manager"}
 
@@ -171,6 +188,7 @@ async def owner_wallet_topup(request: web.Request) -> web.Response:
 
 def _page(api_base: str, show_tokens: bool = True, show_wallet: bool = False) -> web.Response:
     html = (_ADMIN_HTML.replace("__API_BASE__", api_base)
+                       .replace("__LOGO__", _LOGO_URI)
                        .replace("__SHOW_TOKENS__", "true" if show_tokens else "false")
                        .replace("__SHOW_WALLET__", "true" if show_wallet else "false"))
     return web.Response(text=html, content_type="text/html")
@@ -206,7 +224,8 @@ _ADMIN_HTML = """<!DOCTYPE html>
   html, body { height:100%; margin:0; }
   body { font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
   header { padding:14px 20px; background:var(--panel); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:24px; flex-wrap:wrap; }
-  header h1 { font-size:17px; margin:0; font-weight:700; }
+  header h1 { font-size:17px; margin:0; font-weight:700; display:flex; align-items:center; gap:10px; }
+  header h1 img.logo { height:30px; width:auto; display:block; }
   .stats { display:flex; gap:22px; flex-wrap:wrap; }
   .stat { display:flex; flex-direction:column; }
   .stat b { font-size:16px; }
@@ -257,7 +276,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1>🌷 ЦветоМир · диалоги</h1>
+    <h1><img class="logo" src="__LOGO__" alt="ЦветоМир">ЦветоМир · диалоги</h1>
     <div class="stats" id="stats"></div>
     <div class="wallet" id="wallet" style="display:none"></div>
     <input id="search" placeholder="Поиск по имени / телефону / id…">
