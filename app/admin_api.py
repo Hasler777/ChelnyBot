@@ -244,6 +244,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
   th { color:var(--mut); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; cursor:pointer; user-select:none; white-space:nowrap; }
   tbody tr { cursor:pointer; }
   tbody tr:hover { background:var(--panel2); }
+  th.num { text-align:right; }
   td.num { text-align:right; font-variant-numeric:tabular-nums; }
   .cost { font-weight:600; color:#7ee2a8; }
   .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:var(--panel2); color:var(--mut); }
