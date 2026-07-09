@@ -107,6 +107,21 @@ async def _users_response(
     return web.json_response(payload)
 
 
+async def owner_wallet_state() -> dict:
+    """Остаток виртуального кошелька владельца в рублях: {balance, spent, remaining}.
+    Тот же расчёт, что отдаёт /owner (расход с наценкой по видимым клиентам × курс),
+    вынесен отдельно — им пользуется фоновый сторож баланса (services/balance_alert)."""
+    users = await storage.users_overview()
+    hidden = settings.owner_hidden_ids
+    if hidden:
+        users = [u for u in users if u["tg_id"] not in hidden]
+    cost_usd = sum(u.get("cost") or 0 for u in users) * settings.owner_cost_markup
+    rate = await _usd_rub_rate()
+    balance = await storage.wallet_balance()
+    spent = cost_usd * rate
+    return {"balance": balance, "spent": spent, "remaining": balance - spent}
+
+
 async def _dialog_response(request: web.Request, markup: float) -> web.Response:
     try:
         tg_id = int(request.query.get("tg_id", ""))
@@ -373,8 +388,7 @@ function renderStats(t){
   document.getElementById('stats').innerHTML = [
     ['Пользователей', t.users],
     ['Сообщений', t.messages],
-    ['LLM-запросов', t.calls],
-    ...(SHOW_TOKENS ? [['Токенов', (t.tokens||0).toLocaleString('ru-RU')]] : []),
+    ...(SHOW_TOKENS ? [['LLM-запросов', t.calls], ['Токенов', (t.tokens||0).toLocaleString('ru-RU')]] : []),
     ['Затраты всего', money(t.cost)],
   ].map(([s,v])=>`<div class="stat"><b>${v}</b><span>${s}</span></div>`).join('');
 }

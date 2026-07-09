@@ -70,6 +70,10 @@ CREATE TABLE IF NOT EXISTS wallet (
     note TEXT,
     ts REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_messages_tg ON messages(tg_id, id);
 CREATE INDEX IF NOT EXISTS idx_users_conv ON users(amojo_conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_tg ON usage(tg_id);
@@ -359,6 +363,20 @@ class Storage:
         )
         await self.db.commit()
         return await self.wallet_balance()
+
+    # ---------- служебное key-value состояние ----------
+    async def state_get(self, key: str) -> str | None:
+        cur = await self.db.execute("SELECT value FROM app_state WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return row["value"] if row else None
+
+    async def state_set(self, key: str, value: str) -> None:
+        await self.db.execute(
+            "INSERT INTO app_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        await self.db.commit()
 
     async def dialog_cost(self, tg_id: int) -> dict:
         """Стоимость и расход токенов одного диалога."""

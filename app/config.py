@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     reminder_enabled: bool = True
     reminder_idle_minutes: float = 10.0  # сколько молчать до напоминания
 
+    # Уведомления владельцу о низком балансе кошелька (/owner) — через ОТДЕЛЬНОГО бота.
+    # notify_bot_token — токен бота-уведомлятора (@BotFather), notify_chat_id — Telegram
+    # получателя (владелец должен один раз нажать Start у этого бота). Алерт шлётся, когда
+    # остаток кошелька падает ниже порога; повторно — только после пополнения выше порога.
+    notify_bot_token: str = ""
+    notify_chat_id: Optional[int] = None
+    wallet_alert_enabled: bool = True
+    wallet_alert_threshold_rub: float = 500.0
+
     # Прочее
     db_path: str = "data/bot.db"
     log_level: str = "INFO"
@@ -88,7 +97,7 @@ class Settings(BaseSettings):
     @field_validator(
         "amo_pipeline_id", "amo_status_id", "amo_cf_product", "amo_cf_product_url",
         "amo_cf_price", "amo_cf_budget", "amo_cf_delivery", "amo_cf_source",
-        "amo_cf_contact_phone", mode="before",
+        "amo_cf_contact_phone", "notify_chat_id", mode="before",
     )
     @classmethod
     def _empty_to_none(cls, v):
