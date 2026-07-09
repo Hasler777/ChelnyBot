@@ -19,6 +19,7 @@ from aiohttp import web
 
 from app.config import settings
 from app.db.storage import storage
+from app.services.dialog_analysis import analyze
 
 log = logging.getLogger(__name__)
 
@@ -188,6 +189,23 @@ async def owner_dialog(request: web.Request) -> web.Response:
     return await _dialog_response(request, settings.owner_cost_markup)
 
 
+async def _analysis_response(hidden: set[int] | None) -> web.Response:
+    texts = await storage.client_dialog_texts(hidden)
+    return web.json_response(analyze(texts))
+
+
+async def api_analysis(request: web.Request) -> web.Response:
+    if not _check(request.query.get("token"), settings.admin_token):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return await _analysis_response(None)
+
+
+async def owner_analysis(request: web.Request) -> web.Response:
+    if not _check(request.query.get("token"), settings.owner_token):
+        return web.json_response({"error": "forbidden"}, status=403)
+    return await _analysis_response(settings.owner_hidden_ids)
+
+
 async def owner_wallet_topup(request: web.Request) -> web.Response:
     """Пополнение/корректировка виртуального кошелька (в рублях)."""
     if not _check(request.query.get("token"), settings.owner_token):
@@ -221,9 +239,11 @@ def add_admin_routes(app: web.Application) -> None:
     app.router.add_get("/admin", get_admin_page)
     app.router.add_get("/admin/api/users", api_users)
     app.router.add_get("/admin/api/dialog", api_dialog)
+    app.router.add_get("/admin/api/analysis", api_analysis)
     app.router.add_get("/owner", get_owner_page)
     app.router.add_get("/owner/api/users", owner_users)
     app.router.add_get("/owner/api/dialog", owner_dialog)
+    app.router.add_get("/owner/api/analysis", owner_analysis)
     app.router.add_post("/owner/api/wallet/topup", owner_wallet_topup)
 
 
@@ -288,6 +308,20 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .meta { font-size:10px; opacity:.6; margin:0 4px 2px; }
   #empty { color:var(--mut); text-align:center; padding:40px 0; }
   .no-tokens .col-tokens { display:none; }
+  /* анализ диалогов */
+  .analysis { margin-top:30px; }
+  .analysis h2 { font-size:15px; margin:0 0 2px; }
+  .analysis .asub { font-size:12px; color:var(--mut); margin-bottom:14px; }
+  .agrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+  .acard { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .acard h3 { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); margin:0 0 12px; }
+  .aitem { display:grid; grid-template-columns:132px 1fr 34px; align-items:center; gap:10px; margin-bottom:9px; font-size:13px; }
+  .aitem:last-child { margin-bottom:0; }
+  .aitem .albl { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .aitem .abar { height:8px; background:var(--panel2); border-radius:5px; overflow:hidden; }
+  .aitem .abar > i { display:block; height:100%; background:var(--acc); border-radius:5px; }
+  .aitem .acnt { text-align:right; font-variant-numeric:tabular-nums; color:var(--mut); }
+  .acard .aempty { color:var(--mut); font-size:12px; }
 </style>
 </head>
 <body>
@@ -311,6 +345,12 @@ _ADMIN_HTML = """<!DOCTYPE html>
       </tr></thead>
       <tbody id="rows"><tr><td colspan="8" id="empty">Загрузка…</td></tr></tbody>
     </table>
+
+    <section class="analysis" id="analysis" style="display:none">
+      <h2>Анализ диалогов</h2>
+      <div class="asub" id="asub"></div>
+      <div class="agrid" id="agrid"></div>
+    </section>
   </main>
 
   <div id="overlay">
@@ -363,6 +403,38 @@ async function loadUsers(){
   renderStats(j.totals);
   renderWallet(j.wallet);
   render();
+  loadAnalysis();
+}
+
+function plural(n,a,b,c){ n=Math.abs(n)%100; const n1=n%10; if(n>10&&n<20)return c; if(n1>1&&n1<5)return b; if(n1===1)return a; return c; }
+
+async function loadAnalysis(){
+  let r;
+  try { r = await fetch(`${API}/api/analysis?token=${encodeURIComponent(token)}`); }
+  catch(e){ return; }
+  if(!r.ok) return;
+  renderAnalysis(await r.json());
+}
+
+function renderAnalysis(j){
+  const sec = document.getElementById('analysis');
+  const groups = j.groups || [];
+  if(!groups.length){ sec.style.display='none'; return; }
+  sec.style.display = 'block';
+  const n = j.total || 0;
+  document.getElementById('asub').textContent =
+    `по сообщениям клиентов · ${n} ${plural(n,'диалог','диалога','диалогов')}`;
+  document.getElementById('agrid').innerHTML = groups.map(g=>{
+    const items = (g.items||[]).filter(i=>i.count>0);
+    const max = Math.max(1, ...items.map(i=>i.count));
+    const body = items.length ? items.map(i=>`
+      <div class="aitem">
+        <span class="albl">${esc(i.label)}</span>
+        <span class="abar"><i style="width:${Math.round(i.count/max*100)}%"></i></span>
+        <span class="acnt">${i.count}</span>
+      </div>`).join('') : '<div class="aempty">Нет упоминаний</div>';
+    return `<div class="acard"><h3>${esc(g.name)}</h3>${body}</div>`;
+  }).join('');
 }
 
 function rub(x){ x = x || 0; const v = Math.abs(x) >= 100 ? Math.round(x).toLocaleString('ru-RU') : x.toFixed(2); return v + ' ₽'; }

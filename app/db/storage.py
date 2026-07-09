@@ -364,6 +364,21 @@ class Storage:
         await self.db.commit()
         return await self.wallet_balance()
 
+    async def client_dialog_texts(self, hidden: set[int] | None = None) -> list[str]:
+        """Склеенный текст сообщений КЛИЕНТА (role='user') по каждому диалогу.
+        Одна строка на tg_id. hidden — tg_id, которые исключить (скрытые из /owner)."""
+        cur = await self.db.execute(
+            "SELECT tg_id, content FROM messages WHERE role = 'user' ORDER BY tg_id, id"
+        )
+        rows = await cur.fetchall()
+        by_id: dict[int, list[str]] = {}
+        hidden = hidden or set()
+        for r in rows:
+            if r["tg_id"] in hidden:
+                continue
+            by_id.setdefault(r["tg_id"], []).append(r["content"] or "")
+        return [" ".join(parts) for parts in by_id.values()]
+
     # ---------- служебное key-value состояние ----------
     async def state_get(self, key: str) -> str | None:
         cur = await self.db.execute("SELECT value FROM app_state WHERE key = ?", (key,))
