@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -31,11 +32,12 @@ class User:
     amo_contact_id: int | None = None
     amo_last_note_id: int = 0
     context_since: float = 0.0  # с какого времени брать сообщения в контекст LLM (метка /start)
+    channel: str = "tg"  # источник диалога: 'tg' (Telegram) или 'web' (виджет на сайте)
 
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    tg_id INTEGER PRIMARY KEY,
+    tg_id INTEGER PRIMARY KEY,   -- для web-диалогов здесь отрицательный uid (см. web_sessions)
     name TEXT,
     phone TEXT,
     state TEXT NOT NULL DEFAULT 'consult',
@@ -44,8 +46,16 @@ CREATE TABLE IF NOT EXISTS users (
     amojo_chat_id TEXT,
     amo_contact_id INTEGER,
     context_since REAL DEFAULT 0,
+    channel TEXT NOT NULL DEFAULT 'tg',
     created_at REAL,
     updated_at REAL
+);
+-- Веб-виджет: браузер хранит случайный uuid в localStorage; ему сопоставляется
+-- стабильный отрицательный uid, который дальше используется везде как «tg_id».
+CREATE TABLE IF NOT EXISTS web_sessions (
+    uuid TEXT PRIMARY KEY,
+    uid INTEGER NOT NULL UNIQUE,
+    created_at REAL
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +94,8 @@ class Storage:
     def __init__(self, path: str) -> None:
         self._path = path
         self._db: aiosqlite.Connection | None = None
+        # выдача uid новым web-сессиям должна быть атомарной (SELECT MIN + INSERT)
+        self._web_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
@@ -96,6 +108,7 @@ class Storage:
             "ALTER TABLE users ADD COLUMN amo_contact_id INTEGER",
             "ALTER TABLE users ADD COLUMN context_since REAL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN reminder_sent REAL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN channel TEXT NOT NULL DEFAULT 'tg'",
         ):
             try:
                 await self._db.execute(ddl)
@@ -113,18 +126,53 @@ class Storage:
         return self._db
 
     # ---------- users ----------
-    async def get_or_create_user(self, tg_id: int) -> User:
+    async def get_or_create_user(self, tg_id: int, channel: str = "tg") -> User:
         cur = await self.db.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,))
         row = await cur.fetchone()
         if row is None:
             now = time.time()
             await self.db.execute(
-                "INSERT INTO users (tg_id, state, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (tg_id, STATE_CONSULT, now, now),
+                "INSERT INTO users (tg_id, state, channel, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (tg_id, STATE_CONSULT, channel, now, now),
             )
             await self.db.commit()
-            return User(tg_id, None, None, STATE_CONSULT, None, None, None)
+            user = User(tg_id, None, None, STATE_CONSULT, None, None, None)
+            user.channel = channel
+            return user
         return self._row_to_user(row)
+
+    async def web_session_uid(self, uuid: str) -> tuple[int, bool]:
+        """Вернуть стабильный uid для браузерного uuid; создать при первом обращении.
+
+        uid — отрицательное число (диапазон, не пересекающийся с Telegram-ID),
+        которое дальше используется везде как «tg_id». Второй элемент кортежа —
+        признак «сессия только что создана» (нужно показать приветствие)."""
+        cur = await self.db.execute(
+            "SELECT uid FROM web_sessions WHERE uuid = ?", (uuid,)
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            return int(row["uid"]), False
+        async with self._web_lock:
+            # повторная проверка внутри лока — вдруг создали параллельно
+            cur = await self.db.execute(
+                "SELECT uid FROM web_sessions WHERE uuid = ?", (uuid,)
+            )
+            row = await cur.fetchone()
+            if row is not None:
+                return int(row["uid"]), False
+            cur = await self.db.execute("SELECT MIN(uid) AS m FROM web_sessions")
+            m = (await cur.fetchone())["m"]
+            uid = (int(m) if m is not None else 0) - 1  # -1, -2, -3, …
+            now = time.time()
+            await self.db.execute(
+                "INSERT INTO web_sessions (uuid, uid, created_at) VALUES (?, ?, ?)",
+                (uuid, uid, now),
+            )
+            await self.db.commit()
+        await self.get_or_create_user(uid, channel="web")
+        return uid, True
 
     async def get_user(self, tg_id: int) -> User | None:
         cur = await self.db.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,))
@@ -178,6 +226,7 @@ class Storage:
             amo_contact_id=row["amo_contact_id"] if "amo_contact_id" in keys else None,
             amo_last_note_id=row["amo_last_note_id"] if "amo_last_note_id" in keys else 0,
             context_since=row["context_since"] if "context_since" in keys else 0.0,
+            channel=row["channel"] if "channel" in keys else "tg",
         )
 
     # ---------- messages ----------
@@ -265,6 +314,7 @@ class Storage:
                    (SELECT MAX(m.ts) FROM messages m WHERE m.tg_id = u.tg_id) AS last_ts
             FROM users u
             WHERE u.state = ? AND COALESCE(u.reminder_sent, 0) = 0
+              AND COALESCE(u.channel, 'tg') = 'tg'
             """,
             (STATE_CONSULT,),
         )

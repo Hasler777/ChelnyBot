@@ -81,7 +81,18 @@ async def connect_channel(amojo_account_id: str, title: str = "Соня — Tele
 
 
 def conversation_id_for(tg_id: int) -> str:
+    # web-диалоги идут с отрицательным uid — даём им отдельный префикс,
+    # чтобы идентификатор беседы в amoCRM был читаемым и не путался с Telegram.
+    if tg_id < 0:
+        return f"web-{-tg_id}"
     return f"tg-{tg_id}"
+
+
+def _user_ref(tg_id: int) -> str:
+    """Идентификатор пользователя в amoJo (стабильный per-клиент)."""
+    if tg_id < 0:
+        return f"web-user-{-tg_id}"
+    return f"tg-user-{tg_id}"
 
 
 async def create_chat(*, tg_id: int, name: str, phone: str | None = None) -> str | None:
@@ -97,7 +108,7 @@ async def create_chat(*, tg_id: int, name: str, phone: str | None = None) -> str
     payload = {
         "conversation_id": conversation_id_for(tg_id),
         "user": {
-            "id": f"tg-user-{tg_id}",
+            "id": _user_ref(tg_id),
             "name": name or "Клиент",
             "profile": profile,
         },
@@ -121,7 +132,7 @@ async def send_to_amo(*, tg_id: int, text: str, name: str, phone: str | None = N
             "msgid": uuid.uuid4().hex,
             "conversation_id": conversation_id_for(tg_id),
             "sender": {
-                "id": f"tg-user-{tg_id}",
+                "id": _user_ref(tg_id),
                 "name": name or "Клиент",
                 "profile": profile,
             },

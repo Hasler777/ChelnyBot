@@ -64,6 +64,25 @@ class Settings(BaseSettings):
     widget_public_url: str = "https://144-31-108-55.sslip.io"
     widget_token: str = ""  # общий секрет, который виджет шлёт в запросах
 
+    # Веб-виджет Сони на сайте (чат-пузырь). Публичный адрес самого сервера бота —
+    # там же живут /web/* эндпоинты (берём тот же, что и widget_public_url).
+    web_enabled: bool = True
+    # Домены, которым разрешён доступ к /web/* (CORS). CSV. "*" — любой.
+    web_allowed_origins: str = "https://cvety-naberezhnye.ru,https://www.cvety-naberezhnye.ru"
+    # Приветствие в веб-виджете (если пусто — берётся стандартное из bot/texts.py).
+    web_greeting: str = ""
+    # Простой троттлинг публичного эндпоинта: не чаще N сообщений за окно на сессию.
+    web_rate_limit: int = 20
+    web_rate_window_sec: float = 60.0
+
+    @property
+    def web_origins(self) -> set[str]:
+        return {
+            o.strip().rstrip("/")
+            for o in self.web_allowed_origins.split(",")
+            if o.strip()
+        }
+
     # Админка (список диалогов, пользователей и стоимости)
     admin_token: str = ""   # пароль для входа в /admin (если пусто — доступ открыт)
     usd_rub_rate: float = 0  # курс USD→RUB для показа стоимости в рублях (0 — не показывать)

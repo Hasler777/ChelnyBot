@@ -65,16 +65,26 @@ async def handle_webhook(request: web.Request) -> web.Response:
         log.warning("Не найден пользователь для conversation_id=%s", conversation_id)
         return web.json_response({"ok": True})
 
-    try:
-        await bot.send_message(user.tg_id, text)
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Не удалось доставить ответ менеджера в Telegram: %s", exc)
+    # «Обратная нога» ответа менеджера зависит от канала диалога:
+    #   web — в браузер через SSE (+ сохраняем в историю, чтобы виджет показал
+    #         сообщение после перезагрузки страницы);
+    #   tg  — как раньше, прямиком в Telegram.
+    if user.channel == "web":
+        from app.web_api import push_to_web
+        await storage.add_message(user.tg_id, "manager", text)
+        await push_to_web(user.tg_id, text)
+    else:
+        try:
+            await bot.send_message(user.tg_id, text)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Не удалось доставить ответ менеджера в Telegram: %s", exc)
 
     return web.json_response({"ok": True})
 
 
 def build_app(bot: Bot) -> web.Application:
     from app.admin_api import add_admin_routes
+    from app.web_api import add_web_routes
     from app.widget_api import add_widget_routes
 
     app = web.Application()
@@ -85,4 +95,5 @@ def build_app(bot: Bot) -> web.Application:
     app.router.add_get("/health", lambda _r: web.Response(text="ok"))
     add_widget_routes(app)
     add_admin_routes(app)
+    add_web_routes(app)
     return app
