@@ -305,7 +305,14 @@ _WIDGET_JS = r"""
   if (!UUID) { UUID = uuid(); localStorage.setItem(STORAGE_KEY, UUID); }
 
   var side = POS === 'left' ? 'left:20px;' : 'right:20px;';
+  var sidePanel = POS === 'left' ? 'left:20px;' : 'right:20px;';
   var css = `
+  :host{ all: initial; }
+  .snya-wrap{ font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;
+    font-size:14px; line-height:1.4; color:#222; font-weight:400; letter-spacing:normal;
+    text-transform:none; -webkit-font-smoothing:antialiased; }
+  .snya-wrap *{ box-sizing:border-box; font-family:inherit; margin:0; padding:0;
+    text-transform:none; letter-spacing:normal; }
   .snya-btn{position:fixed;bottom:20px;${side}z-index:2147483000;width:60px;height:60px;
     border-radius:50%;background:${COLOR};border:none;cursor:pointer;box-shadow:0 6px 22px rgba(0,0,0,.25);
     display:flex;align-items:center;justify-content:center;transition:transform .15s;}
@@ -313,39 +320,55 @@ _WIDGET_JS = r"""
   .snya-btn svg{width:28px;height:28px;fill:#fff;}
   .snya-badge{position:absolute;top:-2px;right:-2px;min-width:18px;height:18px;border-radius:9px;
     background:#fff;color:${COLOR};font:700 11px/18px system-ui;text-align:center;padding:0 4px;display:none;}
-  .snya-panel{position:fixed;bottom:92px;${side}z-index:2147483000;width:370px;max-width:calc(100vw - 32px);
+  .snya-panel{position:fixed;bottom:92px;${sidePanel}z-index:2147483000;width:370px;max-width:calc(100vw - 40px);
     height:560px;max-height:calc(100vh - 120px);background:#fff;border-radius:16px;overflow:hidden;
-    box-shadow:0 12px 48px rgba(0,0,0,.28);display:none;flex-direction:column;
-    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+    box-shadow:0 12px 48px rgba(0,0,0,.28);display:none;flex-direction:column;}
   .snya-open .snya-panel{display:flex;}
-  .snya-head{background:${COLOR};color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;}
+  .snya-head{background:${COLOR};color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;flex:0 0 auto;}
   .snya-head .snya-av{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.22);
-    display:flex;align-items:center;justify-content:center;font-size:20px;}
-  .snya-head .snya-t{font-weight:700;font-size:15px;}
-  .snya-head .snya-s{font-size:12px;opacity:.85;}
-  .snya-x{margin-left:auto;background:none;border:none;color:#fff;font-size:22px;cursor:pointer;opacity:.85;line-height:1;}
-  .snya-log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px;background:#f7f7f9;}
+    display:flex;align-items:center;justify-content:center;font-size:20px;flex:0 0 auto;}
+  .snya-head .snya-t{font-weight:700;font-size:15px;line-height:1.2;}
+  .snya-head .snya-s{font-size:12px;opacity:.85;line-height:1.3;margin-top:1px;}
+  .snya-x{margin-left:auto;background:none;border:none;color:#fff;font-size:22px;cursor:pointer;
+    opacity:.85;line-height:1;width:28px;height:28px;flex:0 0 auto;}
+  .snya-x:hover{opacity:1;}
+  .snya-log{flex:1 1 auto;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px;background:#f7f7f9;}
   .snya-row{display:flex;}
   .snya-row.me{justify-content:flex-end;}
   .snya-b{max-width:80%;padding:9px 12px;border-radius:14px;font-size:14px;line-height:1.4;
-    white-space:pre-wrap;word-wrap:break-word;}
+    white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere;}
   .snya-row.me .snya-b{background:${COLOR};color:#fff;border-bottom-right-radius:4px;}
   .snya-row.bot .snya-b,.snya-row.manager .snya-b{background:#fff;color:#222;border:1px solid #ececf0;border-bottom-left-radius:4px;}
   .snya-row.manager .snya-b{border-left:3px solid ${COLOR};}
-  .snya-b a{color:inherit;}
+  .snya-b a{color:inherit;text-decoration:underline;}
   .snya-row.me .snya-b a{color:#fff;}
-  .snya-meta{font-size:10px;opacity:.55;margin:0 6px 2px;}
-  .snya-typing{font-size:12px;color:#888;padding:2px 6px;display:none;}
-  .snya-foot{display:flex;gap:8px;padding:10px;border-top:1px solid #ececf0;background:#fff;}
-  .snya-in{flex:1;resize:none;border:1px solid #dcdce2;border-radius:10px;padding:9px 11px;font-size:14px;
-    height:40px;max-height:110px;outline:none;font-family:inherit;}
+  .snya-typing{font-size:12px;color:#888;padding:2px 14px 6px;display:none;flex:0 0 auto;background:#f7f7f9;}
+  .snya-foot{display:flex;align-items:flex-end;gap:8px;padding:10px;border-top:1px solid #ececf0;background:#fff;flex:0 0 auto;}
+  .snya-in{flex:1 1 auto;resize:none;border:1px solid #dcdce2;border-radius:10px;padding:9px 11px;
+    font-size:14px;line-height:1.35;height:40px;min-height:40px;max-height:110px;outline:none;
+    color:#222;background:#fff;display:block;}
+  .snya-in::placeholder{color:#9aa0a6;opacity:1;}
   .snya-in:focus{border-color:${COLOR};}
-  .snya-send{border:none;border-radius:10px;background:${COLOR};color:#fff;width:42px;cursor:pointer;font-size:18px;}
+  .snya-send{flex:0 0 44px;border:none;border-radius:10px;background:${COLOR};color:#fff;
+    width:44px;height:40px;cursor:pointer;font-size:17px;display:flex;align-items:center;justify-content:center;}
+  .snya-send:hover{filter:brightness(1.05);}
   .snya-send:disabled{opacity:.5;cursor:default;}
+  @media (max-width:480px){
+    .snya-panel{left:0;right:0;bottom:0;width:100%;max-width:100%;height:82vh;max-height:82vh;
+      border-radius:16px 16px 0 0;}
+    .snya-btn{bottom:16px;${side}width:56px;height:56px;}
+  }
   `;
-  var st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
+  // Shadow DOM: полная изоляция от CSS темы сайта (иначе стили WoodMart/Elementor
+  // ломают поле ввода и кнопки). Виджет живёт в своём теневом дереве.
+  var host = document.createElement('div');
+  host.setAttribute('data-sonya-widget', '');
+  host.style.cssText = 'all: initial;';  // нейтрализуем стили темы на самом хосте
+  document.body.appendChild(host);
+  var shadow = host.attachShadow({ mode: 'open' });
+  var st = document.createElement('style'); st.textContent = css; shadow.appendChild(st);
 
-  var root = document.createElement('div');
+  var root = document.createElement('div'); root.className = 'snya-wrap';
   root.innerHTML = `
     <button class="snya-btn" aria-label="Открыть чат">
       <span class="snya-badge">1</span>
@@ -364,7 +387,7 @@ _WIDGET_JS = r"""
         <button class="snya-send">➤</button>
       </div>
     </div>`;
-  document.body.appendChild(root);
+  shadow.appendChild(root);
 
   var btn = root.querySelector('.snya-btn');
   var badge = root.querySelector('.snya-badge');
