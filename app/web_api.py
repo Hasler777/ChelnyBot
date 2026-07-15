@@ -263,12 +263,18 @@ async def web_demo(request: web.Request) -> web.Response:
     return web.Response(text=_DEMO_HTML, content_type="text/html")
 
 
+async def web_chat(request: web.Request) -> web.Response:
+    """Полноэкранная страница-чат с Соней (без пузыря) — для теста и прямых ссылок."""
+    return web.Response(text=_CHAT_HTML, content_type="text/html")
+
+
 def add_web_routes(app: web.Application) -> None:
     app.router.add_post("/web/start", web_start)
     app.router.add_post("/web/message", web_message)
     app.router.add_get("/web/stream", web_stream)
     app.router.add_get("/web/widget.js", web_widget_js)
     app.router.add_get("/web/demo", web_demo)
+    app.router.add_get("/web/chat", web_chat)
     app.router.add_route("OPTIONS", "/web/start", _preflight)
     app.router.add_route("OPTIONS", "/web/message", _preflight)
 
@@ -510,4 +516,113 @@ h1{color:#d6336c}</style></head>
 <p>На боевом сайте этот же виджет подключит плагин WordPress одной строкой.</p>
 <script src="/web/widget.js" data-title="Соня · ЦветоМира"
         data-subtitle="Онлайн-консультант по букетам" data-color="#d6336c"></script>
+</body></html>"""
+
+
+# =====================================================================
+#  Полноэкранный чат-режим (страница /web/chat) — тот же API, без пузыря.
+# =====================================================================
+_CHAT_HTML = r"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Соня · ЦветоМира</title>
+<style>
+  :root{ --c:#d6336c; }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+  body{ font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;
+    background:#f7f7f9; color:#222; display:flex; flex-direction:column; height:100dvh; }
+  header{ background:var(--c); color:#fff; padding:12px 16px; display:flex; align-items:center;
+    gap:10px; flex:0 0 auto; box-shadow:0 2px 8px rgba(0,0,0,.12); }
+  header .av{ width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.22);
+    display:flex; align-items:center; justify-content:center; font-size:20px; }
+  header .t{ font-weight:700; font-size:16px; line-height:1.2; }
+  header .s{ font-size:12px; opacity:.85; margin-top:1px; }
+  #log{ flex:1 1 auto; overflow-y:auto; padding:16px; display:flex; flex-direction:column;
+    gap:8px; max-width:820px; width:100%; margin:0 auto; }
+  .row{ display:flex; }
+  .row.me{ justify-content:flex-end; }
+  .b{ max-width:82%; padding:10px 13px; border-radius:14px; font-size:15px; line-height:1.45;
+    white-space:pre-wrap; word-wrap:break-word; overflow-wrap:anywhere; }
+  .row.me .b{ background:var(--c); color:#fff; border-bottom-right-radius:4px; }
+  .row.bot .b,.row.manager .b{ background:#fff; color:#222; border:1px solid #ececf0;
+    border-bottom-left-radius:4px; }
+  .row.manager .b{ border-left:3px solid var(--c); }
+  .b a{ color:inherit; text-decoration:underline; }
+  .row.me .b a{ color:#fff; }
+  #typing{ font-size:12px; color:#888; padding:0 16px 6px; display:none;
+    max-width:820px; width:100%; margin:0 auto; }
+  footer{ flex:0 0 auto; background:#fff; border-top:1px solid #ececf0; padding:10px;
+    display:flex; align-items:flex-end; gap:8px; max-width:820px; width:100%; margin:0 auto; }
+  #in{ flex:1 1 auto; resize:none; border:1px solid #dcdce2; border-radius:12px; padding:11px 13px;
+    font-size:15px; line-height:1.35; height:44px; min-height:44px; max-height:130px; outline:none;
+    font-family:inherit; }
+  #in:focus{ border-color:var(--c); }
+  #send{ flex:0 0 48px; width:48px; height:44px; border:none; border-radius:12px; background:var(--c);
+    color:#fff; font-size:18px; cursor:pointer; }
+  #send:disabled{ opacity:.5; cursor:default; }
+  .footwrap{ flex:0 0 auto; background:#fff; border-top:1px solid #ececf0; }
+</style></head>
+<body>
+  <header>
+    <div class="av">🌷</div>
+    <div><div class="t">Соня · ЦветоМира</div>
+    <div class="s">Онлайн-консультант по букетам</div></div>
+  </header>
+  <div id="log"></div>
+  <div id="typing">Соня печатает…</div>
+  <div class="footwrap"><footer>
+    <textarea id="in" placeholder="Напишите сообщение…" rows="1"></textarea>
+    <button id="send">➤</button>
+  </footer></div>
+<script>
+(function(){
+  var API = location.origin;
+  var KEY = 'sonya_chat_uuid';
+  function uuid(){
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){
+      var r=Math.random()*16|0,v=c==='x'?r:(r&0x3)|0x8; return v.toString(16); });
+  }
+  var UUID = localStorage.getItem(KEY); if(!UUID){ UUID=uuid(); localStorage.setItem(KEY,UUID); }
+  var logEl=document.getElementById('log'), input=document.getElementById('in'),
+      sendBtn=document.getElementById('send'), typingEl=document.getElementById('typing');
+
+  function esc(s){ var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+  function linkify(s){ return esc(s).replace(/(https?:\/\/[^\s<]+)/g,function(u){
+    return '<a href="'+u+'" target="_blank" rel="noopener">'+u+'</a>'; }); }
+  function atBottom(){ return logEl.scrollHeight-logEl.scrollTop-logEl.clientHeight<80; }
+  function scroll(){ logEl.scrollTop=logEl.scrollHeight; }
+  function addMsg(from,text){ var stick=atBottom();
+    var row=document.createElement('div'); row.className='row '+(from==='me'?'me':from);
+    row.innerHTML='<div class="b">'+linkify(text)+'</div>'; logEl.appendChild(row);
+    if(stick) scroll(); }
+  function setTyping(on){ typingEl.style.display=on?'block':'none'; if(on) scroll(); }
+  async function api(path,body){ var r=await fetch(API+path,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return r.json(); }
+
+  async function start(){
+    try{ var d=await api('/web/start',{uuid:UUID}); logEl.innerHTML='';
+      (d.messages||[]).forEach(function(m){ addMsg(m.from,m.text); }); scroll();
+    }catch(e){ addMsg('bot','Не удалось загрузить чат. Обновите страницу.'); }
+    try{ var es=new EventSource(API+'/web/stream?uuid='+encodeURIComponent(UUID));
+      es.onmessage=function(ev){ try{ var m=JSON.parse(ev.data);
+        if(m&&m.text) addMsg('manager',m.text); }catch(e){} }; }catch(e){}
+  }
+  async function send(){ var text=input.value.trim(); if(!text) return;
+    input.value=''; input.style.height='44px'; addMsg('me',text); scroll();
+    sendBtn.disabled=true; setTyping(true);
+    try{ var d=await api('/web/message',{uuid:UUID,text:text}); setTyping(false);
+      if(d&&d.reply) addMsg('bot',d.reply);
+    }catch(e){ setTyping(false); addMsg('bot','Ошибка сети, попробуйте ещё раз.'); }
+    sendBtn.disabled=false; input.focus(); }
+
+  sendBtn.addEventListener('click',send);
+  input.addEventListener('keydown',function(e){
+    if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
+  input.addEventListener('input',function(){ input.style.height='44px';
+    input.style.height=Math.min(input.scrollHeight,130)+'px'; });
+  start(); input.focus();
+})();
+</script>
 </body></html>"""
