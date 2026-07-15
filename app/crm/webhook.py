@@ -73,6 +73,8 @@ async def handle_webhook(request: web.Request) -> web.Response:
         from app.web_api import push_to_web
         await storage.add_message(user.tg_id, "manager", text)
         await push_to_web(user.tg_id, text)
+    elif bot is None:
+        log.warning("Telegram отключён (web-only): ответ менеджера для tg-канала пропущен")
     else:
         try:
             await bot.send_message(user.tg_id, text)

@@ -35,6 +35,20 @@ async def _run_webhook_server(bot: Bot) -> web.AppRunner:
 async def main() -> None:
     await storage.connect()
 
+    # Web-only режим (тестовый веб-виджет): Telegram-бота не поднимаем,
+    # держим только aiohttp-сервер с /web/* эндпоинтами.
+    if not settings.telegram_enabled:
+        runner = await _run_webhook_server(None)
+        log.info("Telegram отключён (TELEGRAM_ENABLED=false) — web-only режим, "
+                 "работает только веб-сервер %s:%s", settings.webhook_host,
+                 settings.webhook_port)
+        try:
+            await asyncio.Event().wait()  # держим сервер живым
+        finally:
+            await runner.cleanup()
+            await storage.close()
+        return
+
     bot = Bot(token=settings.telegram_bot_token)
     dp = Dispatcher()
     dp.include_router(router)

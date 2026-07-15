@@ -8,11 +8,11 @@ services:
     volumes:
       - ./data:/app/data
 
-  # Тестовый бот-двойник. Тот же образ, но своё окружение (.env.test):
-  #   - другой Telegram-токен (отдельный бот @BotFather);
+  # Тестовый двойник Сони. Тот же образ, но своё окружение (.env.test):
+  #   - web-only режим (TELEGRAM_ENABLED=false) → Telegram-бот не нужен,
+  #     тестируем через веб-виджет на http://<сервер>:8081/web/demo;
   #   - amoCRM/amoJo выключены (пустые креды) → заявки НЕ уходят в CRM;
-  #   - своя БД в ./data-test → диалоги НЕ видны в проде (/admin, /owner);
-  #   - веб-виджет выключен, порт наружу не пробрасываем — нет конфликтов.
+  #   - своя БД в ./data-test → диалоги НЕ видны в проде (/admin, /owner).
   #
   # ВАЖНО про прод: сервис в профиле "test", поэтому обычная команда
   #   docker compose up -d   (или up -d bot)  ЕГО НЕ ТРОГАЕТ и НЕ требует .env.test —
@@ -23,5 +23,7 @@ services:
     restart: unless-stopped
     profiles: ["test"]
     env_file: .env.test
+    ports:
+      - "8081:8080"   # веб-виджет теста (демо-страница /web/demo); прод слушает 8080
     volumes:
       - ./data-test:/app/data

@@ -13,7 +13,11 @@ class Settings(BaseSettings):
     )
 
     # Telegram
-    telegram_bot_token: str
+    telegram_bot_token: str = ""
+    # Web-only режим: если False — Telegram-бот НЕ поднимается (поллинг не
+    # запускается), работает только aiohttp-сервер с /web/* (веб-виджет).
+    # Прод оставляет True; тестовый веб-двойник ставит TELEGRAM_ENABLED=false.
+    telegram_enabled: bool = True
 
     # OpenRouter / LLM
     openrouter_api_key: str
