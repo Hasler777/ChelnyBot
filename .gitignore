@@ -1,7 +1,9 @@
 .env
+.env.test
 __pycache__/
 *.pyc
 data/
+data-test/
 *.db
 .venv/
 venv/

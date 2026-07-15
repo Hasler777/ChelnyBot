@@ -7,3 +7,21 @@ services:
       - "8080:8080"   # вебхук amoJo (поставьте за reverse-proxy с HTTPS)
     volumes:
       - ./data:/app/data
+
+  # Тестовый бот-двойник. Тот же образ, но своё окружение (.env.test):
+  #   - другой Telegram-токен (отдельный бот @BotFather);
+  #   - amoCRM/amoJo выключены (пустые креды) → заявки НЕ уходят в CRM;
+  #   - своя БД в ./data-test → диалоги НЕ видны в проде (/admin, /owner);
+  #   - веб-виджет выключен, порт наружу не пробрасываем — нет конфликтов.
+  #
+  # ВАЖНО про прод: сервис в профиле "test", поэтому обычная команда
+  #   docker compose up -d   (или up -d bot)  ЕГО НЕ ТРОГАЕТ и НЕ требует .env.test —
+  # прод поднимается как раньше, даже если .env.test на сервере ещё нет.
+  # Запуск теста ЯВНО:   docker compose --profile test up -d --build bot-test
+  bot-test:
+    build: .
+    restart: unless-stopped
+    profiles: ["test"]
+    env_file: .env.test
+    volumes:
+      - ./data-test:/app/data
