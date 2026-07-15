@@ -263,11 +263,23 @@ async def web_demo(request: web.Request) -> web.Response:
     return web.Response(text=_DEMO_HTML, content_type="text/html")
 
 
+# Ссылки фрейма RescalesAI вокруг чата (демо-обёртка). ЗАПОЛНИТЬ реальными
+# значениями. Пустая строка "" — кнопка/ссылка скрывается.
+_FRAME_LINKS = {
+    "__RS_SITE__": "",       # официальный сайт RescalesAI
+    "__RS_SOLUTIONS__": "",  # страница «решения для бизнеса» (можно тот же сайт)
+    "__RS_TG__": "",         # https://t.me/<handle>
+    "__RS_WA__": "",         # https://wa.me/<номер без +>
+}
+
+
 async def web_chat(request: web.Request) -> web.Response:
     """Полноэкранная страница-чат с Соней (без пузыря) — для теста и прямых ссылок."""
-    from app.branding import LOGO_SVG
-    return web.Response(text=_CHAT_HTML.replace("<!--LOGO-->", LOGO_SVG),
-                        content_type="text/html")
+    from app.branding import RESCALES_LOGO_SVG
+    html = _CHAT_HTML.replace("<!--RS_LOGO-->", RESCALES_LOGO_SVG)
+    for token, url in _FRAME_LINKS.items():
+        html = html.replace(token, url or "#")
+    return web.Response(text=html, content_type="text/html")
 
 
 def add_web_routes(app: web.Application) -> None:
@@ -542,9 +554,33 @@ _CHAT_HTML = r"""<!DOCTYPE html>
       radial-gradient(1200px 600px at 100% -10%, rgba(226,59,48,.08), transparent 60%),
       radial-gradient(900px 500px at -10% 110%, rgba(193,39,45,.07), transparent 60%),
       var(--bg);
-    display:flex; align-items:center; justify-content:center; padding:24px; }
+    display:flex; flex-direction:column; }
 
-  .app{ width:100%; max-width:880px; height:100%; max-height:900px; background:var(--panel);
+  /* ---- Фрейм RescalesAI вокруг чата ---- */
+  .topbar{ flex:0 0 auto; display:flex; align-items:center; justify-content:space-between;
+    gap:16px; padding:16px 24px; }
+  .brand{ display:flex; align-items:center; gap:14px; min-width:0; }
+  .brand .rs-logo{ color:var(--ink); width:34px; height:34px; flex:0 0 auto; }
+  .brand .rs-logo .rs-logo-svg{ width:34px; height:34px; display:block; }
+  .brand .rs-name{ font-weight:800; font-size:18px; letter-spacing:-.02em; color:var(--ink); }
+  .brand .rs-name b{ color:var(--red); font-weight:800; }
+  .brand .rs-links{ display:flex; gap:8px; margin-left:6px; }
+  .navbtn{ text-decoration:none; font-size:13px; font-weight:600; color:var(--muted);
+    border:1.5px solid var(--line); background:#fff; padding:7px 13px; border-radius:18px;
+    white-space:nowrap; transition:color .15s,border-color .15s,background .15s; }
+  .navbtn:hover{ color:var(--red); border-color:var(--red); background:#FFF5F4; }
+  .contacts{ display:flex; align-items:center; gap:10px; flex:0 0 auto; }
+  .cbtn{ display:inline-flex; align-items:center; gap:8px; text-decoration:none;
+    font-size:14px; font-weight:600; color:#fff; padding:9px 16px; border-radius:22px;
+    box-shadow:0 6px 16px -6px rgba(0,0,0,.3); transition:filter .15s,transform .1s; }
+  .cbtn:hover{ filter:brightness(1.05); } .cbtn:active{ transform:scale(.97); }
+  .cbtn svg{ width:18px; height:18px; fill:#fff; }
+  .cbtn.tg{ background:#229ED9; } .cbtn.wa{ background:#25D366; }
+
+  .stage{ flex:1 1 auto; min-height:0; display:flex; align-items:center; justify-content:center;
+    padding:8px 24px 28px; }
+
+  .app{ width:100%; max-width:820px; height:100%; max-height:840px; background:var(--panel);
     border-radius:22px; box-shadow:0 24px 60px -12px rgba(23,23,26,.22), 0 6px 18px rgba(23,23,26,.06);
     display:flex; flex-direction:column; overflow:hidden; }
 
@@ -553,7 +589,7 @@ _CHAT_HTML = r"""<!DOCTYPE html>
   header .av{ width:46px; height:46px; border-radius:50%; background:var(--grad); color:#fff;
     display:flex; align-items:center; justify-content:center; flex:0 0 auto;
     box-shadow:0 6px 16px -4px rgba(193,39,45,.5); }
-  header .av .logo-svg{ width:30px; height:30px; display:block; }
+  header .av .flower{ width:28px; height:28px; display:block; }
   header .meta{ min-width:0; }
   header .t{ font-weight:700; font-size:17px; line-height:1.2; letter-spacing:-.01em;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -607,17 +643,56 @@ _CHAT_HTML = r"""<!DOCTYPE html>
   #send:disabled{ opacity:.45; cursor:default; box-shadow:none; }
   #send svg{ width:20px; height:20px; fill:#fff; }
 
+  @media (max-width:900px){
+    .brand .rs-links{ display:none; }
+  }
   @media (max-width:640px){
-    body{ padding:0; }
+    .topbar{ padding:12px 14px; }
+    .brand .rs-name{ font-size:16px; }
+    .cbtn .clabel{ display:none; } .cbtn{ padding:9px; border-radius:50%; }
+    .stage{ padding:0; }
     .app{ max-height:none; border-radius:0; box-shadow:none; }
   }
 </style></head>
 <body>
+  <div class="topbar">
+    <div class="brand">
+      <a class="rs-logo" href="__RS_SITE__" target="_blank" rel="noopener" aria-label="RescalesAI"><!--RS_LOGO--></a>
+      <span class="rs-name">RE<b>scales</b>AI</span>
+      <span class="rs-links">
+        <a class="navbtn" href="__RS_SITE__" target="_blank" rel="noopener">Официальный сайт</a>
+        <a class="navbtn" href="__RS_SOLUTIONS__" target="_blank" rel="noopener">Решения для бизнеса</a>
+      </span>
+    </div>
+    <div class="contacts">
+      <a class="cbtn tg" href="__RS_TG__" target="_blank" rel="noopener" title="Telegram">
+        <svg viewBox="0 0 24 24"><path d="M21.9 4.3l-3.3 15.6c-.25 1.1-.9 1.37-1.82.85l-5.03-3.7-2.43 2.34c-.27.27-.5.5-1 .5l.36-5.1L18 6.1c.4-.36-.09-.56-.62-.2L6.9 12.7l-4.95-1.55c-1.08-.34-1.1-1.08.23-1.6l19.35-7.46c.9-.33 1.68.2 1.37 2.21z"/></svg>
+        <span class="clabel">Telegram</span>
+      </a>
+      <a class="cbtn wa" href="__RS_WA__" target="_blank" rel="noopener" title="WhatsApp">
+        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 00-8.6 15l-1.3 4.7 4.8-1.26A10 10 0 1012 2zm5.8 14.2c-.24.68-1.4 1.3-1.94 1.34-.5.05-1.13.07-1.82-.11-.42-.13-.96-.31-1.65-.61-2.9-1.25-4.8-4.17-4.94-4.36-.15-.2-1.18-1.57-1.18-3s.75-2.13 1.02-2.42a1.07 1.07 0 01.77-.36c.19 0 .39 0 .56.01.18.01.42-.07.66.5.24.59.83 2.02.9 2.17.07.15.12.32.02.51-.1.2-.15.32-.29.49-.15.17-.31.39-.44.52-.15.15-.3.31-.13.6.17.3.76 1.25 1.63 2.02 1.12 1 2.06 1.31 2.35 1.46.3.15.47.12.64-.07.17-.2.74-.86.94-1.16.2-.3.4-.24.66-.15.27.1 1.7.8 2 .95.28.15.47.22.54.34.07.12.07.68-.17 1.35z"/></svg>
+        <span class="clabel">WhatsApp</span>
+      </a>
+    </div>
+  </div>
+  <div class="stage">
   <div class="app">
     <header>
-      <div class="av"><!--LOGO--></div>
-      <div class="meta"><div class="t">Соня · ЦветоМира</div>
-      <div class="s"><span class="dot"></span>Онлайн-консультант по букетам</div></div>
+      <div class="av">
+        <svg class="flower" viewBox="0 0 24 24" aria-hidden="true">
+          <g fill="#ffffff">
+            <ellipse cx="12" cy="6.2" rx="2.5" ry="4.3"/>
+            <ellipse cx="12" cy="6.2" rx="2.5" ry="4.3" transform="rotate(60 12 12)"/>
+            <ellipse cx="12" cy="6.2" rx="2.5" ry="4.3" transform="rotate(120 12 12)"/>
+            <ellipse cx="12" cy="6.2" rx="2.5" ry="4.3" transform="rotate(180 12 12)"/>
+            <ellipse cx="12" cy="6.2" rx="2.5" ry="4.3" transform="rotate(240 12 12)"/>
+            <ellipse cx="12" cy="6.2" rx="2.5" ry="4.3" transform="rotate(300 12 12)"/>
+          </g>
+          <circle cx="12" cy="12" r="2.7" fill="#FFCE45"/>
+        </svg>
+      </div>
+      <div class="meta"><div class="t">ЦветоМира</div>
+      <div class="s"><span class="dot"></span>Соня — онлайн-консультант по букетам</div></div>
       <button id="restart" type="button" title="Начать чат заново">
         <svg viewBox="0 0 24 24"><path d="M12 5V2L7 7l5 5V8c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
         <span class="rlabel">Заново</span>
@@ -631,6 +706,7 @@ _CHAT_HTML = r"""<!DOCTYPE html>
         <svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a1 1 0 00-1.39 1.2L4.5 11.5 12 12l-7.5.5-2.49 6.7a1 1 0 001.39 1.2z"/></svg>
       </button>
     </footer>
+  </div>
   </div>
 <script>
 (function(){

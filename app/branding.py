@@ -1,11 +1,12 @@
-"""Брендовые ассеты (логотип ЦветоМира) для веб-страниц Сони."""
+"""Брендовые ассеты для веб-страниц Сони."""
 
-LOGO_SVG = r'''<svg class="logo-svg" version="1.0" xmlns="http://www.w3.org/2000/svg"
+# Логотип RescalesAI (нейтральный currentColor — красим через CSS)
+RESCALES_LOGO_SVG = r'''<svg class="rs-logo-svg" version="1.0" xmlns="http://www.w3.org/2000/svg"
  viewBox="0 0 1024.000000 1024.000000"
  preserveAspectRatio="xMidYMid meet">
 
 <g transform="translate(0.000000,1024.000000) scale(0.100000,-0.100000)"
-fill="#ffffff" stroke="none">
+fill="currentColor" stroke="none">
 <path d="M5080 9118 c-14 -18 -42 -60 -64 -93 -44 -68 -58 -89 -108 -160 -19
 -27 -79 -115 -133 -195 -54 -80 -135 -198 -179 -263 -45 -66 -85 -126 -91
 -136 -5 -9 -55 -83 -110 -164 -55 -82 -111 -166 -125 -187 -14 -21 -52 -78
