@@ -658,7 +658,7 @@ _CHAT_HTML = r"""<!DOCTYPE html>
   <div class="topbar">
     <div class="brand">
       <a class="rs-logo" href="__RS_SITE__" target="_blank" rel="noopener" aria-label="RescalesAI"><!--RS_LOGO--></a>
-      <span class="rs-name">RE<b>scales</b>AI</span>
+      <span class="rs-name"><b>RE</b>scalesAI</span>
       <span class="rs-links">
         <a class="navbtn" href="__RS_SITE__" target="_blank" rel="noopener">Официальный сайт</a>
         <a class="navbtn" href="__RS_SOLUTIONS__" target="_blank" rel="noopener">Решения для бизнеса</a>
@@ -691,7 +691,7 @@ _CHAT_HTML = r"""<!DOCTYPE html>
           <circle cx="12" cy="12" r="2.7" fill="#FFCE45"/>
         </svg>
       </div>
-      <div class="meta"><div class="t">ЦветоМира</div>
+      <div class="meta"><div class="t">Цветочный магазин</div>
       <div class="s"><span class="dot"></span>Соня — онлайн-консультант по букетам</div></div>
       <button id="restart" type="button" title="Начать чат заново">
         <svg viewBox="0 0 24 24"><path d="M12 5V2L7 7l5 5V8c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
