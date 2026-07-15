@@ -265,7 +265,9 @@ async def web_demo(request: web.Request) -> web.Response:
 
 async def web_chat(request: web.Request) -> web.Response:
     """Полноэкранная страница-чат с Соней (без пузыря) — для теста и прямых ссылок."""
-    return web.Response(text=_CHAT_HTML, content_type="text/html")
+    from app.branding import LOGO_SVG
+    return web.Response(text=_CHAT_HTML.replace("<!--LOGO-->", LOGO_SVG),
+                        content_type="text/html")
 
 
 def add_web_routes(app: web.Application) -> None:
@@ -548,13 +550,25 @@ _CHAT_HTML = r"""<!DOCTYPE html>
 
   header{ display:flex; align-items:center; gap:12px; padding:16px 20px;
     background:var(--panel); border-bottom:1px solid var(--line); flex:0 0 auto; }
-  header .av{ width:44px; height:44px; border-radius:50%; background:var(--grad); color:#fff;
-    display:flex; align-items:center; justify-content:center; font-size:22px; flex:0 0 auto;
+  header .av{ width:46px; height:46px; border-radius:50%; background:var(--grad); color:#fff;
+    display:flex; align-items:center; justify-content:center; flex:0 0 auto;
     box-shadow:0 6px 16px -4px rgba(193,39,45,.5); }
-  header .t{ font-weight:700; font-size:17px; line-height:1.2; letter-spacing:-.01em; }
+  header .av .logo-svg{ width:30px; height:30px; display:block; }
+  header .meta{ min-width:0; }
+  header .t{ font-weight:700; font-size:17px; line-height:1.2; letter-spacing:-.01em;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   header .s{ font-size:12.5px; color:var(--muted); margin-top:2px; display:flex; align-items:center; gap:6px; }
   header .dot{ width:7px; height:7px; border-radius:50%; background:#2fbf6c;
     box-shadow:0 0 0 3px rgba(47,191,108,.16); flex:0 0 auto; }
+  #restart{ margin-left:auto; flex:0 0 auto; display:flex; align-items:center; gap:7px;
+    background:#fff; border:1.5px solid var(--line); color:var(--muted); cursor:pointer;
+    height:38px; padding:0 14px; border-radius:20px; font-family:inherit; font-size:13px; font-weight:600;
+    transition:color .15s,border-color .15s,background .15s; }
+  #restart svg{ width:15px; height:15px; fill:currentColor; transition:transform .4s; }
+  #restart:hover{ color:var(--red); border-color:var(--red); background:#FFF5F4; }
+  #restart:hover svg{ transform:rotate(-180deg); }
+  #restart .rlabel{ }
+  @media (max-width:520px){ #restart .rlabel{ display:none; } #restart{ padding:0; width:38px; justify-content:center; } }
 
   #log{ flex:1 1 auto; overflow-y:auto; padding:20px; display:flex; flex-direction:column;
     gap:10px; background:#FBF9F9; }
@@ -601,9 +615,13 @@ _CHAT_HTML = r"""<!DOCTYPE html>
 <body>
   <div class="app">
     <header>
-      <div class="av">🌷</div>
-      <div><div class="t">Соня · ЦветоМира</div>
+      <div class="av"><!--LOGO--></div>
+      <div class="meta"><div class="t">Соня · ЦветоМира</div>
       <div class="s"><span class="dot"></span>Онлайн-консультант по букетам</div></div>
+      <button id="restart" type="button" title="Начать чат заново">
+        <svg viewBox="0 0 24 24"><path d="M12 5V2L7 7l5 5V8c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+        <span class="rlabel">Заново</span>
+      </button>
     </header>
     <div id="log"></div>
     <div id="typing"><span class="dots"><i></i><i></i><i></i></span></div>
@@ -655,6 +673,13 @@ _CHAT_HTML = r"""<!DOCTYPE html>
       if(d&&d.reply) addMsg('bot',d.reply);
     }catch(e){ setTyping(false); addMsg('bot','Ошибка сети, попробуйте ещё раз.'); }
     sendBtn.disabled=false; input.focus(); }
+
+  var restartBtn=document.getElementById('restart');
+  if(restartBtn) restartBtn.addEventListener('click',function(){
+    if(!confirm('Начать чат заново? Текущая переписка очистится.')) return;
+    localStorage.removeItem(KEY);           // новая сессия → Соня поздоровается заново
+    location.reload();
+  });
 
   sendBtn.addEventListener('click',send);
   input.addEventListener('keydown',function(e){
