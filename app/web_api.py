@@ -527,54 +527,93 @@ _CHAT_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Соня · ЦветоМира</title>
 <style>
-  :root{ --c:#d6336c; }
+  :root{
+    --red:#C1272D; --red-2:#E23B30; --red-ink:#9E1B20;
+    --ink:#17171A; --muted:#6B6B73; --bg:#F3EFEE; --panel:#FFFFFF; --line:#ECE7E6;
+    --grad:linear-gradient(135deg,#E23B30 0%,#C1272D 100%);
+    --font:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;
+  }
   *{ box-sizing:border-box; margin:0; padding:0; }
   html,body{ height:100%; }
-  body{ font-family:system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;
-    background:#f7f7f9; color:#222; display:flex; flex-direction:column; height:100dvh; }
-  header{ background:var(--c); color:#fff; padding:12px 16px; display:flex; align-items:center;
-    gap:10px; flex:0 0 auto; box-shadow:0 2px 8px rgba(0,0,0,.12); }
-  header .av{ width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.22);
-    display:flex; align-items:center; justify-content:center; font-size:20px; }
-  header .t{ font-weight:700; font-size:16px; line-height:1.2; }
-  header .s{ font-size:12px; opacity:.85; margin-top:1px; }
-  #log{ flex:1 1 auto; overflow-y:auto; padding:16px; display:flex; flex-direction:column;
-    gap:8px; max-width:820px; width:100%; margin:0 auto; }
+  body{ font-family:var(--font); color:var(--ink); height:100dvh;
+    background:
+      radial-gradient(1200px 600px at 100% -10%, rgba(226,59,48,.08), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(193,39,45,.07), transparent 60%),
+      var(--bg);
+    display:flex; align-items:center; justify-content:center; padding:24px; }
+
+  .app{ width:100%; max-width:880px; height:100%; max-height:900px; background:var(--panel);
+    border-radius:22px; box-shadow:0 24px 60px -12px rgba(23,23,26,.22), 0 6px 18px rgba(23,23,26,.06);
+    display:flex; flex-direction:column; overflow:hidden; }
+
+  header{ display:flex; align-items:center; gap:12px; padding:16px 20px;
+    background:var(--panel); border-bottom:1px solid var(--line); flex:0 0 auto; }
+  header .av{ width:44px; height:44px; border-radius:50%; background:var(--grad); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-size:22px; flex:0 0 auto;
+    box-shadow:0 6px 16px -4px rgba(193,39,45,.5); }
+  header .t{ font-weight:700; font-size:17px; line-height:1.2; letter-spacing:-.01em; }
+  header .s{ font-size:12.5px; color:var(--muted); margin-top:2px; display:flex; align-items:center; gap:6px; }
+  header .dot{ width:7px; height:7px; border-radius:50%; background:#2fbf6c;
+    box-shadow:0 0 0 3px rgba(47,191,108,.16); flex:0 0 auto; }
+
+  #log{ flex:1 1 auto; overflow-y:auto; padding:20px; display:flex; flex-direction:column;
+    gap:10px; background:#FBF9F9; }
+  #log::-webkit-scrollbar{ width:9px; }
+  #log::-webkit-scrollbar-thumb{ background:#E2DBDA; border-radius:9px; border:2px solid #FBF9F9; }
   .row{ display:flex; }
   .row.me{ justify-content:flex-end; }
-  .b{ max-width:82%; padding:10px 13px; border-radius:14px; font-size:15px; line-height:1.45;
+  .b{ max-width:80%; padding:11px 15px; border-radius:18px; font-size:15px; line-height:1.5;
     white-space:pre-wrap; word-wrap:break-word; overflow-wrap:anywhere; }
-  .row.me .b{ background:var(--c); color:#fff; border-bottom-right-radius:4px; }
-  .row.bot .b,.row.manager .b{ background:#fff; color:#222; border:1px solid #ececf0;
-    border-bottom-left-radius:4px; }
-  .row.manager .b{ border-left:3px solid var(--c); }
-  .b a{ color:inherit; text-decoration:underline; }
+  .row.me .b{ background:var(--grad); color:#fff; border-bottom-right-radius:5px;
+    box-shadow:0 6px 16px -6px rgba(193,39,45,.5); }
+  .row.bot .b,.row.manager .b{ background:#fff; color:var(--ink); border:1px solid var(--line);
+    border-bottom-left-radius:5px; box-shadow:0 2px 6px rgba(23,23,26,.04); }
+  .row.manager .b{ border-left:3px solid var(--red); }
+  .b a{ color:var(--red-ink); text-decoration:underline; text-underline-offset:2px; font-weight:600; }
   .row.me .b a{ color:#fff; }
-  #typing{ font-size:12px; color:#888; padding:0 16px 6px; display:none;
-    max-width:820px; width:100%; margin:0 auto; }
-  footer{ flex:0 0 auto; background:#fff; border-top:1px solid #ececf0; padding:10px;
-    display:flex; align-items:flex-end; gap:8px; max-width:820px; width:100%; margin:0 auto; }
-  #in{ flex:1 1 auto; resize:none; border:1px solid #dcdce2; border-radius:12px; padding:11px 13px;
-    font-size:15px; line-height:1.35; height:44px; min-height:44px; max-height:130px; outline:none;
-    font-family:inherit; }
-  #in:focus{ border-color:var(--c); }
-  #send{ flex:0 0 48px; width:48px; height:44px; border:none; border-radius:12px; background:var(--c);
-    color:#fff; font-size:18px; cursor:pointer; }
-  #send:disabled{ opacity:.5; cursor:default; }
-  .footwrap{ flex:0 0 auto; background:#fff; border-top:1px solid #ececf0; }
+
+  #typing{ display:none; padding:0 22px 8px; flex:0 0 auto; background:#FBF9F9; }
+  #typing .dots{ display:inline-flex; gap:4px; align-items:center; padding:9px 14px;
+    background:#fff; border:1px solid var(--line); border-radius:16px; box-shadow:0 2px 6px rgba(23,23,26,.04); }
+  #typing .dots i{ width:7px; height:7px; border-radius:50%; background:#C9BEBD; animation:bl 1.2s infinite; }
+  #typing .dots i:nth-child(2){ animation-delay:.2s; } #typing .dots i:nth-child(3){ animation-delay:.4s; }
+  @keyframes bl{ 0%,60%,100%{ opacity:.25; transform:translateY(0); } 30%{ opacity:1; transform:translateY(-3px); } }
+
+  footer{ flex:0 0 auto; background:var(--panel); border-top:1px solid var(--line);
+    padding:14px 16px; display:flex; align-items:flex-end; gap:10px; }
+  #in{ flex:1 1 auto; resize:none; border:1.5px solid var(--line); border-radius:24px;
+    padding:12px 18px; font-size:15px; line-height:1.4; height:48px; min-height:48px; max-height:140px;
+    outline:none; font-family:inherit; color:var(--ink); background:#FBF9F9; transition:border-color .15s,background .15s; }
+  #in::placeholder{ color:#A79F9E; }
+  #in:focus{ border-color:var(--red); background:#fff; }
+  #send{ flex:0 0 48px; width:48px; height:48px; border:none; border-radius:50%; background:var(--grad);
+    color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 6px 16px -4px rgba(193,39,45,.5); transition:filter .15s,transform .1s; }
+  #send:hover{ filter:brightness(1.06); } #send:active{ transform:scale(.94); }
+  #send:disabled{ opacity:.45; cursor:default; box-shadow:none; }
+  #send svg{ width:20px; height:20px; fill:#fff; }
+
+  @media (max-width:640px){
+    body{ padding:0; }
+    .app{ max-height:none; border-radius:0; box-shadow:none; }
+  }
 </style></head>
 <body>
-  <header>
-    <div class="av">🌷</div>
-    <div><div class="t">Соня · ЦветоМира</div>
-    <div class="s">Онлайн-консультант по букетам</div></div>
-  </header>
-  <div id="log"></div>
-  <div id="typing">Соня печатает…</div>
-  <div class="footwrap"><footer>
-    <textarea id="in" placeholder="Напишите сообщение…" rows="1"></textarea>
-    <button id="send">➤</button>
-  </footer></div>
+  <div class="app">
+    <header>
+      <div class="av">🌷</div>
+      <div><div class="t">Соня · ЦветоМира</div>
+      <div class="s"><span class="dot"></span>Онлайн-консультант по букетам</div></div>
+    </header>
+    <div id="log"></div>
+    <div id="typing"><span class="dots"><i></i><i></i><i></i></span></div>
+    <footer>
+      <textarea id="in" placeholder="Напишите сообщение…" rows="1"></textarea>
+      <button id="send" aria-label="Отправить">
+        <svg viewBox="0 0 24 24"><path d="M3.4 20.4l17.45-7.48a1 1 0 000-1.84L3.4 3.6a1 1 0 00-1.39 1.2L4.5 11.5 12 12l-7.5.5-2.49 6.7a1 1 0 001.39 1.2z"/></svg>
+      </button>
+    </footer>
+  </div>
 <script>
 (function(){
   var API = location.origin;
