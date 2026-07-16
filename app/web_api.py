@@ -266,10 +266,10 @@ async def web_demo(request: web.Request) -> web.Response:
 # Ссылки фрейма RescalesAI вокруг чата (демо-обёртка). ЗАПОЛНИТЬ реальными
 # значениями. Пустая строка "" — кнопка/ссылка скрывается.
 _FRAME_LINKS = {
-    "__RS_SITE__": "",       # официальный сайт RescalesAI
-    "__RS_SOLUTIONS__": "",  # страница «решения для бизнеса» (можно тот же сайт)
-    "__RS_TG__": "",         # https://t.me/<handle>
-    "__RS_WA__": "",         # https://wa.me/<номер без +>
+    "__RS_SITE__": "https://rescales.ai",
+    "__RS_SOLUTIONS__": "https://rescales.ai/#products",
+    "__RS_TG__": "https://t.me/rescalesai",
+    "__RS_WA__": "https://wa.me/79933092355",
 }
 
 
@@ -691,7 +691,7 @@ _CHAT_HTML = r"""<!DOCTYPE html>
           <circle cx="12" cy="12" r="2.7" fill="#FFCE45"/>
         </svg>
       </div>
-      <div class="meta"><div class="t">Цветочный магазин</div>
+      <div class="meta"><div class="t">ЦветоМир</div>
       <div class="s"><span class="dot"></span>Соня — онлайн-консультант по букетам</div></div>
       <button id="restart" type="button" title="Начать чат заново">
         <svg viewBox="0 0 24 24"><path d="M12 5V2L7 7l5 5V8c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
