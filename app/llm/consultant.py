@@ -41,6 +41,12 @@ _HANDOFF_ANNOUNCE_RE = re.compile(
     r"(переда|соедин|подключ)\w*[^.!?\n]{0,60}флорист",
     re.I,
 )
+# ...но НЕ форсируем, если это ПРЕДЛОЖЕНИЕ/вопрос («хотите, передам флористу?»),
+# а не решение. Иначе клиента передаёт флористу до его согласия.
+_HANDOFF_OFFER_RE = re.compile(
+    r"хотите|хотели|если\s+хотите|могу\s+переда|можем\s+переда|нужно\s+ли|\?",
+    re.I,
+)
 
 
 async def _guard_reply(tg_id: int, text: str, offered: list[Product],
@@ -181,7 +187,9 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
             # Модель анонсировала передачу флористу («передаю ваш запрос флористу»),
             # но НЕ вызвала handoff_to_florist — форсируем реальную передачу, иначе
             # клиент остаётся ждать и вынужден переспрашивать «а где флорист?».
-            if _HANDOFF_ANNOUNCE_RE.search(text):
+            if (_HANDOFF_ANNOUNCE_RE.search(text)
+                    and not _HANDOFF_OFFER_RE.search(text)   # не предложение/вопрос
+                    and not _SHOP_URL_RE.search(text)):      # не показ товаров
                 log.info("Модель анонсировала хэндофф без инструмента — форсирую передачу для %s", tg_id)
                 return ConsultResult(handoff=HandoffData.from_args({}))
             # «Минутку, сейчас подберу!» без вызова инструмента — модель тянет время
