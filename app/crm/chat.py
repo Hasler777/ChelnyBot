@@ -23,6 +23,7 @@ from email.utils import formatdate
 import aiohttp
 
 from app.config import settings
+from app.db.storage import MAX_UID_BASE
 
 log = logging.getLogger(__name__)
 
@@ -81,10 +82,13 @@ async def connect_channel(amojo_account_id: str, title: str = "Соня — Tele
 
 
 def conversation_id_for(tg_id: int) -> str:
-    # web-диалоги идут с отрицательным uid — даём им отдельный префикс,
-    # чтобы идентификатор беседы в amoCRM был читаемым и не путался с Telegram.
+    # Разные каналы -> разный префикс беседы в amoCRM, чтобы id был читаемым и
+    # не путался между собой (web-диалоги — отрицательный uid, MAX — из «полки»
+    # ≥ MAX_UID_BASE, обычный Telegram — положительный tg_id).
     if tg_id < 0:
         return f"web-{-tg_id}"
+    if tg_id >= MAX_UID_BASE:
+        return f"max-{tg_id - MAX_UID_BASE}"
     return f"tg-{tg_id}"
 
 
@@ -92,6 +96,8 @@ def _user_ref(tg_id: int) -> str:
     """Идентификатор пользователя в amoJo (стабильный per-клиент)."""
     if tg_id < 0:
         return f"web-user-{-tg_id}"
+    if tg_id >= MAX_UID_BASE:
+        return f"max-user-{tg_id - MAX_UID_BASE}"
     return f"tg-user-{tg_id}"
 
 

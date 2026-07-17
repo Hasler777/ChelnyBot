@@ -19,6 +19,24 @@ from app.config import settings
 STATE_CONSULT = "consult"
 STATE_HANDOFF = "handoff"
 
+# Единое пространство идентификаторов: внутренний uid (везде зовётся «tg_id»)
+#   Telegram — реальный tg_id (положительный, на практике < 10^12);
+#   web      — отрицательный uid (см. web_sessions);
+#   MAX      — MAX_UID_BASE + max_user_id (обратимо, канал определяется диапазоном).
+# 10^12 берём с огромным запасом: Telegram-id до него не дорастут ещё очень долго,
+# а MAX user_id (~10^9) укладывается в «полку» [10^12, 10^13).
+MAX_UID_BASE = 1_000_000_000_000  # 10^12
+
+
+def max_uid(max_user_id: int) -> int:
+    """Внешний MAX user_id -> внутренний uid."""
+    return MAX_UID_BASE + int(max_user_id)
+
+
+def max_user_id_from_uid(uid: int) -> int:
+    """Внутренний uid MAX-пользователя -> внешний MAX user_id."""
+    return int(uid) - MAX_UID_BASE
+
 
 @dataclass
 class User:

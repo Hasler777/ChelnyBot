@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     # Прод оставляет True; тестовый веб-двойник ставит TELEGRAM_ENABLED=false.
     telegram_enabled: bool = True
 
+    # MAX (мессенджер) — тот же движок, ещё один канал (см. app/bot/max_bot.py).
+    # Пусто -> канал MAX не поднимается. Авторизация в MAX Bot API — заголовком
+    # Authorization: <token> (без Bearer), база botapi.max.ru, входящие через
+    # long polling GET /updates, исходящие POST /messages?user_id=.
+    max_bot_token: str = ""
+    max_api_url: str = "https://botapi.max.ru"
+
     # OpenRouter / LLM
     openrouter_api_key: str
     openrouter_model: str = "anthropic/claude-sonnet-4.5"
@@ -140,6 +147,10 @@ class Settings(BaseSettings):
                 except ValueError:
                     pass
         return out
+
+    @property
+    def max_enabled(self) -> bool:
+        return bool(self.max_bot_token)
 
     @property
     def amo_enabled(self) -> bool:
