@@ -285,6 +285,9 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:var(--panel2); color:var(--mut); }
   .badge.handoff { background:#3a2d12; color:#f0c674; }
   .badge.consult { background:#13314a; color:#79b8ff; }
+  .src.tg { background:#13314a; color:#79b8ff; }
+  .src.web { background:#1c3a2a; color:#7ee2b8; }
+  .src.max { background:#3a2340; color:#e79bff; }
   .muted { color:var(--mut); }
   /* drawer */
   #overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; }
@@ -336,6 +339,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
       <thead><tr>
         <th data-k="name">Клиент</th>
         <th data-k="phone">Телефон</th>
+        <th data-k="channel">Источник</th>
         <th data-k="state">Статус</th>
         <th data-k="msg_count" class="num">Сообщений</th>
         <th data-k="llm_calls" class="num">Запросов</th>
@@ -343,7 +347,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
         <th data-k="cost" class="num">Стоимость</th>
         <th data-k="last_ts" class="num">Активность</th>
       </tr></thead>
-      <tbody id="rows"><tr><td colspan="8" id="empty">Загрузка…</td></tr></tbody>
+      <tbody id="rows"><tr><td colspan="9" id="empty">Загрузка…</td></tr></tbody>
     </table>
 
     <section class="analysis" id="analysis" style="display:none">
@@ -391,6 +395,8 @@ function money(usd){
 function fmt(ts){ if(!ts) return '—'; const d=new Date(ts*1000); return d.toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
 function label(from){ return from==='manager'?'Менеджер':from==='bot'?'Соня (бот)':'Клиент'; }
 function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+const SRC_LABEL = { tg:'Telegram', web:'Сайт', max:'MAX' };
+function srcBadge(ch){ const c=SRC_LABEL[ch]?ch:'tg'; return `<span class="badge src ${c}">${SRC_LABEL[c]}</span>`; }
 
 async function loadUsers(){
   let r;
@@ -477,11 +483,12 @@ function render(){
     return ((x||0)-(y||0))*sortDir;
   });
   const tb = document.getElementById('rows');
-  if(!rows.length){ tb.innerHTML='<tr><td colspan="8" id="empty">Нет диалогов</td></tr>'; return; }
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="9" id="empty">Нет диалогов</td></tr>'; return; }
   tb.innerHTML = rows.map(u=>`
     <tr data-id="${u.tg_id}">
       <td>${esc(u.name||'Без имени')}<div class="muted" style="font-size:11px">id ${u.tg_id}</div></td>
       <td>${esc(u.phone||'—')}</td>
+      <td>${srcBadge(u.channel)}</td>
       <td><span class="badge ${u.state}">${u.state==='handoff'?'у флориста':'бот'}</span></td>
       <td class="num">${u.msg_count||0}</td>
       <td class="num">${u.llm_calls||0}</td>

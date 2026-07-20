@@ -381,6 +381,7 @@ class Storage:
         cur = await self.db.execute(
             """
             SELECT u.tg_id, u.name, u.phone, u.state, u.amo_lead_id,
+                   COALESCE(u.channel, 'tg') AS channel,
                    u.created_at, u.updated_at,
                    (SELECT COUNT(*) FROM messages m WHERE m.tg_id = u.tg_id) AS msg_count,
                    (SELECT MAX(ts) FROM messages m WHERE m.tg_id = u.tg_id) AS last_ts,
