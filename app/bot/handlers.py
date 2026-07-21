@@ -5,10 +5,11 @@ import asyncio
 import logging
 
 from aiogram import F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import Message
 
 from app.bot.texts import FALLBACK_ERROR, GREETING
+from app.crm import utm
 from app.db.storage import STATE_CONSULT, STATE_HANDOFF, storage
 from app.llm import consultant
 from app.services import handoff
@@ -30,9 +31,19 @@ def _lock_for(tg_id: int) -> asyncio.Lock:
 
 
 @router.message(CommandStart())
-async def on_start(message: Message) -> None:
+async def on_start(message: Message, command: CommandObject) -> None:
     tg_id = message.from_user.id
     await storage.get_or_create_user(tg_id)
+    # Метка канала из deeplink: ссылка вида ?start=vk_senler -> payload "vk_senler".
+    # Пишем источник, только если пришёл непустой payload (не затираем реальную
+    # кампанию пустым /start от того же клиента при повторном заходе).
+    payload = (command.args or "").strip()
+    if payload:
+        await storage.update_user(tg_id, utm_source=utm.normalize(payload))
+    else:
+        user = await storage.get_user(tg_id)
+        if not (user and user.utm_source):
+            await storage.update_user(tg_id, utm_source="")  # прямой вход
     # новый старт — возвращаем диалог боту и ставим метку новой сессии: бот будет
     # брать в контекст только сообщения после неё (свежий контекст, без устаревших
     # товаров). Переписку и расход НЕ удаляем — всё хранится для админки.

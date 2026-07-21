@@ -6,6 +6,7 @@ refresh_token. Первичная авторизация — через одно
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -147,7 +148,7 @@ class AmoClient:
         return data["_embedded"]["contacts"][0]["id"]
 
     def _lead_custom_fields(self, *, product_name: str, product_url: str, price: float,
-                            budget: str, delivery: str) -> list[dict]:
+                            budget: str, delivery: str, source_label: str = "") -> list[dict]:
         fields = []
 
         def add(field_id, value):
@@ -159,13 +160,15 @@ class AmoClient:
         add(settings.amo_cf_price, str(int(price)) if price else "")
         add(settings.amo_cf_budget, budget)
         add(settings.amo_cf_delivery, delivery)
-        add(settings.amo_cf_source, "Telegram-бот Соня")
+        # поле «Источник трафика» — метка канала (UTM) либо общий источник по умолчанию
+        add(settings.amo_cf_source, source_label or "Telegram-бот Соня")
         return fields
 
     async def create_lead(self, *, name: str, phone: str, product_name: str,
                           product_url: str, price: float, budget: str,
                           delivery: str, comment: str,
-                          contact_id: int | None = None) -> tuple[int, int]:
+                          contact_id: int | None = None,
+                          source_label: str = "") -> tuple[int, int]:
         """Создаёт сделку, возвращает (lead_id, contact_id).
 
         Если contact_id передан — переиспользуем его (один tg = один контакт),
@@ -197,9 +200,12 @@ class AmoClient:
             "_embedded": {"contacts": [{"id": contact_id}]},
             "custom_fields_values": self._lead_custom_fields(
                 product_name=product_name, product_url=product_url, price=price,
-                budget=budget, delivery=delivery,
+                budget=budget, delivery=delivery, source_label=source_label,
             ) or None,
         }
+        if source_label:
+            # тег источника — по нему аналитика фильтрует сделки по каналам
+            lead["_embedded"]["tags"] = [{"name": source_label}]
         if settings.amo_pipeline_id:
             lead["pipeline_id"] = settings.amo_pipeline_id
         if settings.amo_status_id:
@@ -272,6 +278,64 @@ class AmoClient:
     async def add_note(self, lead_id: int, text: str) -> None:
         """Публичная обёртка для добавления примечания к сделке."""
         await self._add_note(lead_id, text)
+
+    # ---------- источник трафика (UTM) на сделке из чата amoJo ----------
+    async def find_latest_lead_for_contact(self, contact_id: int, *,
+                                           attempts: int = 6, delay: float = 1.5) -> int | None:
+        """Вернуть id самой свежей сделки контакта.
+
+        В режиме amoJo сделку создаёт сам чат — асинхронно, уже после отправки
+        первого сообщения. Поэтому несколько попыток с паузой: ждём, пока
+        amoCRM заведёт карточку по входящему сообщению.
+        """
+        for i in range(attempts):
+            try:
+                data = await self.get(f"/api/v4/contacts/{contact_id}", {"with": "leads"})
+            except AmoError as exc:
+                log.warning("Не удалось получить сделки контакта %s: %s", contact_id, exc)
+                return None
+            leads = data.get("_embedded", {}).get("leads", []) or []
+            if leads:
+                return max(int(lead["id"]) for lead in leads)
+            if i < attempts - 1:
+                await asyncio.sleep(delay)
+        return None
+
+    async def apply_source_to_lead(self, contact_id: int, source_label: str, *,
+                                   lead_id: int | None = None) -> None:
+        """Проставить источник трафика на сделку контакта: тег + поле AMO_CF_SOURCE.
+
+        Тег добавляем к существующим (сперва читаем текущие), чтобы не затереть
+        канал-тег, который amoCRM ставит сам (telegram/ВК/…).
+        """
+        if not source_label:
+            return
+        if lead_id is None:
+            lead_id = await self.find_latest_lead_for_contact(contact_id)
+        if not lead_id:
+            log.warning("Сделка контакта %s не найдена — источник «%s» не проставлен",
+                        contact_id, source_label)
+            return
+        tags: list[dict] = []
+        try:
+            lead = await self.get(f"/api/v4/leads/{lead_id}")
+            tags = [{"name": t["name"]}
+                    for t in (lead.get("_embedded", {}).get("tags") or [])]
+        except AmoError as exc:
+            log.warning("Не удалось прочитать теги сделки #%s: %s", lead_id, exc)
+        if not any(t.get("name") == source_label for t in tags):
+            tags.append({"name": source_label})
+        body: dict = {"_embedded": {"tags": tags}}
+        if settings.amo_cf_source:
+            body["custom_fields_values"] = [{
+                "field_id": settings.amo_cf_source,
+                "values": [{"value": source_label}],
+            }]
+        try:
+            await self._request("PATCH", f"/api/v4/leads/{lead_id}", json_body=body)
+            log.info("Сделке #%s проставлен источник «%s»", lead_id, source_label)
+        except AmoError as exc:
+            log.warning("Не удалось проставить источник сделке #%s: %s", lead_id, exc)
 
 
 amo = AmoClient()

@@ -1,10 +1,11 @@
 """Передача диалога флористу: создание сделки в amoCRM + перевод в режим чата."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from app.config import settings
-from app.crm import chat
+from app.crm import chat, utm
 from app.crm.amocrm import AmoError, amo
 from app.db.storage import STATE_HANDOFF, storage
 from app.llm.consultant import HandoffData
@@ -12,6 +13,16 @@ from app.llm.consultant import HandoffData
 log = logging.getLogger(__name__)
 
 HANDOFF_MESSAGE = "Передаю флористу — он сейчас подключится 🌸"
+
+# держим ссылки на фоновые задачи проставления источника, чтобы их не собрал GC
+_source_tasks: set[asyncio.Task] = set()
+
+
+def _tag_source_async(contact_id: int, source_label: str) -> None:
+    """Фоново проставить источник на сделку (её создаёт чат amoJo асинхронно)."""
+    task = asyncio.create_task(amo.apply_source_to_lead(contact_id, source_label))
+    _source_tasks.add(task)
+    task.add_done_callback(_source_tasks.discard)
 
 
 async def do_handoff(tg_id: int, data: HandoffData) -> str:
@@ -25,6 +36,8 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     # один Telegram-пользователь = один контакт в amoCRM
     user = await storage.get_user(tg_id)
     existing_contact_id = user.amo_contact_id if user else None
+    # метка канала (UTM из deeplink /start) для аналитики
+    source_label = utm.resolve_source(user.utm_source if user else "")
 
     lead_id: int | None = None
     contact_id: int | None = existing_contact_id
@@ -42,7 +55,7 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
                     name=data.name, phone=data.phone, product_name=data.product_name,
                     product_url=data.product_url, price=data.price, budget=data.budget,
                     delivery=data.delivery_method, comment=data.comment,
-                    contact_id=existing_contact_id,
+                    contact_id=existing_contact_id, source_label=source_label,
                 )
                 log.info("Создана сделка amoCRM #%s для tg_id=%s", lead_id, tg_id)
         except AmoError as exc:
@@ -106,6 +119,10 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
             summary = head + ("\n" + ", ".join(details) if details else "")
             await chat.send_to_amo(tg_id=tg_id, text=summary, name=client_name,
                                    phone=data.phone or None)
+            # Сделку чат создаёт асинхронно по входящему сообщению — фоново
+            # находим её и вешаем тег/поле источника (не задерживаем ответ клиенту).
+            if contact_id:
+                _tag_source_async(contact_id, source_label)
         except Exception as exc:  # noqa: BLE001
             log.exception("Не удалось открыть чат в amoJo: %s", exc)
 

@@ -51,6 +51,7 @@ class User:
     amo_last_note_id: int = 0
     context_since: float = 0.0  # с какого времени брать сообщения в контекст LLM (метка /start)
     channel: str = "tg"  # источник диалога: 'tg' (Telegram) или 'web' (виджет на сайте)
+    utm_source: str | None = None  # метка канала из deeplink /start (для аналитики amoCRM)
 
 
 _SCHEMA = """
@@ -127,6 +128,7 @@ class Storage:
             "ALTER TABLE users ADD COLUMN context_since REAL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN reminder_sent REAL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN channel TEXT NOT NULL DEFAULT 'tg'",
+            "ALTER TABLE users ADD COLUMN utm_source TEXT",
         ):
             try:
                 await self._db.execute(ddl)
@@ -245,6 +247,7 @@ class Storage:
             amo_last_note_id=row["amo_last_note_id"] if "amo_last_note_id" in keys else 0,
             context_since=row["context_since"] if "context_since" in keys else 0.0,
             channel=row["channel"] if "channel" in keys else "tg",
+            utm_source=row["utm_source"] if "utm_source" in keys else None,
         )
 
     # ---------- messages ----------
