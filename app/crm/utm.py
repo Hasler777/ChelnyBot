@@ -65,7 +65,7 @@ def resolve_source(payload: str | None) -> str:
     return f"TG_bot_{payload.strip()}"
 
 
-def admin_label(payload: str | None) -> str | None:
+def admin_label(payload: str | None, custom: dict[str, str] | None = None) -> str | None:
     """Человекочитаемая подпись UTM-источника для админки.
 
     В отличие от resolve_source (метка для amoCRM с префиксом TG_bot_), здесь
@@ -73,14 +73,18 @@ def admin_label(payload: str | None) -> str | None:
       None            -> None  (клиент не из TG-deeplink: веб/MAX или заведён
                                  до появления UTM-меток — «не размечен»);
       пустой payload  -> «Прямой вход» (клиент нажал /start без метки);
+      custom[payload] -> имя кампании, заведённой владельцем в админке (важнее
+                         справочника — владелец мог переименовать источник);
       известная метка -> из справочника без служебного префикса («ВК senler»);
-      новая кампания  -> сам payload (метку в справочник ещё не завели).
+      новая кампания  -> сам payload (метку ни в админке, ни в справочнике не завели).
     """
     if payload is None:
         return None
     p = normalize(payload)
     if not p:
         return "Прямой вход"
+    if custom and p in custom:
+        return custom[p]
     label = SOURCE_LABELS.get(p)
     if label:
         return label.replace("TG_bot_", "")

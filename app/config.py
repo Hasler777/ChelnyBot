@@ -14,6 +14,10 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str = ""
+    # @username бота (без @) — база для deeplink-ссылок UTM `t.me/<username>?start=…`
+    # в админке. Пусто -> username берётся из Telegram getMe по токену в рантайме.
+    # Задаём вручную, когда getMe недоступен (web-only/локально) или чтобы не ходить в сеть.
+    telegram_bot_username: str = ""
     # Web-only режим: если False — Telegram-бот НЕ поднимается (поллинг не
     # запускается), работает только aiohttp-сервер с /web/* (веб-виджет).
     # Прод оставляет True; тестовый веб-двойник ставит TELEGRAM_ENABLED=false.

@@ -103,6 +103,12 @@ CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS utm_campaigns (
+    payload TEXT PRIMARY KEY,   -- нормализованный (lower) ?start=… ; совпадает с users.utm_source
+    label TEXT NOT NULL,        -- человекочитаемое имя кампании (задаёт владелец в админке)
+    created_at REAL,
+    updated_at REAL
+);
 CREATE INDEX IF NOT EXISTS idx_messages_tg ON messages(tg_id, id);
 CREATE INDEX IF NOT EXISTS idx_users_conv ON users(amojo_conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_tg ON usage(tg_id);
@@ -472,6 +478,40 @@ class Storage:
             (key, value),
         )
         await self.db.commit()
+
+    # ---------- UTM-кампании (метки, заведённые владельцем в админке) ----------
+    async def utm_campaign_upsert(self, payload: str, label: str) -> None:
+        """Завести/переименовать кампанию. payload — уже нормализованный (lower),
+        совпадает с users.utm_source. created_at ставится только при вставке."""
+        now = time.time()
+        await self.db.execute(
+            "INSERT INTO utm_campaigns (payload, label, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(payload) DO UPDATE SET label = excluded.label, "
+            "updated_at = excluded.updated_at",
+            (payload, label, now, now),
+        )
+        await self.db.commit()
+
+    async def utm_campaigns_with_counts(self) -> list[dict]:
+        """Список кампаний с числом привлечённых клиентов. Метки с 0 клиентов
+        тоже показываем (коррелирующий подзапрос, не INNER JOIN)."""
+        cur = await self.db.execute(
+            """
+            SELECT c.payload, c.label, c.created_at,
+                   (SELECT COUNT(*) FROM users u WHERE u.utm_source = c.payload) AS count
+            FROM utm_campaigns c
+            ORDER BY count DESC, c.label COLLATE NOCASE
+            """
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def utm_labels_map(self) -> dict[str, str]:
+        """{payload: label} — для подмешивания имён кампаний в utm.admin_label."""
+        cur = await self.db.execute("SELECT payload, label FROM utm_campaigns")
+        rows = await cur.fetchall()
+        return {r["payload"]: r["label"] for r in rows}
 
     async def dialog_cost(self, tg_id: int) -> dict:
         """Стоимость и расход токенов одного диалога."""
