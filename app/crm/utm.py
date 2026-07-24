@@ -63,3 +63,25 @@ def resolve_source(payload: str | None) -> str:
     if label:
         return label
     return f"TG_bot_{payload.strip()}"
+
+
+def admin_label(payload: str | None) -> str | None:
+    """Человекочитаемая подпись UTM-источника для админки.
+
+    В отличие от resolve_source (метка для amoCRM с префиксом TG_bot_), здесь
+    короткая подпись «для глаз»:
+      None            -> None  (клиент не из TG-deeplink: веб/MAX или заведён
+                                 до появления UTM-меток — «не размечен»);
+      пустой payload  -> «Прямой вход» (клиент нажал /start без метки);
+      известная метка -> из справочника без служебного префикса («ВК senler»);
+      новая кампания  -> сам payload (метку в справочник ещё не завели).
+    """
+    if payload is None:
+        return None
+    p = normalize(payload)
+    if not p:
+        return "Прямой вход"
+    label = SOURCE_LABELS.get(p)
+    if label:
+        return label.replace("TG_bot_", "")
+    return p

@@ -18,6 +18,7 @@ import aiohttp
 from aiohttp import web
 
 from app.config import settings
+from app.crm import utm
 from app.db.storage import storage
 from app.services.dialog_analysis import analyze
 
@@ -77,6 +78,9 @@ async def _users_response(
     markup: float, hidden: set[int] | None = None, with_wallet: bool = False
 ) -> web.Response:
     users = await storage.users_overview()
+    # человекочитаемая подпись UTM-источника (для сводки «Источники трафика»)
+    for u in users:
+        u["utm_label"] = utm.admin_label(u.get("utm_source"))
     if hidden:
         # скрываем тестовые аккаунты из кабинета владельца и пересчитываем итоги
         # только по видимым клиентам (в /admin фильтр не применяется)
@@ -148,6 +152,8 @@ async def _dialog_response(request: web.Request, markup: float) -> web.Response:
                 "phone": user.phone if user else None,
                 "state": user.state if user else None,
                 "amo_lead_id": user.amo_lead_id if user else None,
+                "channel": user.channel if user else None,
+                "utm_label": utm.admin_label(user.utm_source) if user else None,
             },
             "usd_rub_rate": await _usd_rub_rate(),
         }
@@ -325,6 +331,11 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .aitem .abar > i { display:block; height:100%; background:var(--acc); border-radius:5px; }
   .aitem .acnt { text-align:right; font-variant-numeric:tabular-nums; color:var(--mut); }
   .acard .aempty { color:var(--mut); font-size:12px; }
+  /* сводка по источникам трафика (UTM) */
+  .srcbreak { margin-bottom:26px; }
+  .srcbreak h2 { font-size:15px; margin:0 0 2px; }
+  .srcbreak .asub { margin-bottom:14px; }
+  .srcbreak .acard.wide .aitem { grid-template-columns:minmax(140px,220px) 1fr 40px; }
 </style>
 </head>
 <body>
@@ -335,6 +346,12 @@ _ADMIN_HTML = """<!DOCTYPE html>
     <input id="search" placeholder="Поиск по имени / телефону / id…">
   </header>
   <main>
+    <section class="srcbreak" id="srcbreak" style="display:none">
+      <h2>Источники трафика</h2>
+      <div class="asub" id="srcsub"></div>
+      <div class="agrid"><div class="acard wide"><h3>Обращения по источникам</h3><div id="srcitems"></div></div></div>
+    </section>
+
     <table>
       <thead><tr>
         <th data-k="name">Клиент</th>
@@ -397,6 +414,14 @@ function label(from){ return from==='manager'?'Менеджер':from==='bot'?'�
 function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 const SRC_LABEL = { tg:'Telegram', web:'Сайт', max:'MAX' };
 function srcBadge(ch){ const c=SRC_LABEL[ch]?ch:'tg'; return `<span class="badge src ${c}">${SRC_LABEL[c]}</span>`; }
+// Итоговый источник клиента для сводки: для TG — UTM-метка кампании
+// (или «Прямой вход» / «Не размечен»), для веба и MAX — сам канал.
+function sourceLabel(u){
+  const ch = u.channel || 'tg';
+  if(ch === 'web') return 'Сайт';
+  if(ch === 'max') return 'MAX';
+  return u.utm_label || 'Не размечен';
+}
 
 async function loadUsers(){
   let r;
@@ -408,8 +433,30 @@ async function loadUsers(){
   data = j.users || [];
   renderStats(j.totals);
   renderWallet(j.wallet);
+  renderSources();
   render();
   loadAnalysis();
+}
+
+function renderSources(){
+  const sec = document.getElementById('srcbreak');
+  if(!data.length){ sec.style.display='none'; return; }
+  const counts = {};
+  for(const u of data){ const k = sourceLabel(u); counts[k] = (counts[k]||0)+1; }
+  const items = Object.entries(counts)
+    .map(([label,count])=>({label,count}))
+    .sort((a,b)=> b.count-a.count || a.label.localeCompare(b.label));
+  sec.style.display = 'block';
+  const n = data.length;
+  document.getElementById('srcsub').textContent =
+    `${n} ${plural(n,'клиент','клиента','клиентов')} · ${items.length} ${plural(items.length,'источник','источника','источников')}`;
+  const max = Math.max(1, ...items.map(i=>i.count));
+  document.getElementById('srcitems').innerHTML = items.map(i=>`
+    <div class="aitem">
+      <span class="albl" title="${esc(i.label)}">${esc(i.label)}</span>
+      <span class="abar"><i style="width:${Math.round(i.count/max*100)}%"></i></span>
+      <span class="acnt">${i.count}</span>
+    </div>`).join('');
 }
 
 function plural(n,a,b,c){ n=Math.abs(n)%100; const n1=n%10; if(n>10&&n<20)return c; if(n1>1&&n1<5)return b; if(n1===1)return a; return c; }
@@ -511,7 +558,7 @@ async function openDialog(tgId){
   const j = await r.json();
   const u=j.user||{}, c=j.cost||{};
   document.getElementById('dname').textContent = u.name||'Без имени';
-  document.getElementById('dsub').innerHTML = `id ${u.tg_id}${u.phone?' · '+esc(u.phone):''}${u.amo_lead_id?' · сделка #'+u.amo_lead_id:''}`;
+  document.getElementById('dsub').innerHTML = `id ${u.tg_id}${u.phone?' · '+esc(u.phone):''}${u.amo_lead_id?' · сделка #'+u.amo_lead_id:''} · <span class="muted">источник:</span> ${esc(sourceLabel(u))}`;
   document.getElementById('dcost').innerHTML = [
     ['Стоимость диалога', money(c.cost)],
     ...(SHOW_TOKENS ? [['Токенов', (c.tokens||0).toLocaleString('ru-RU')]] : []),
