@@ -10,6 +10,7 @@ import html
 import logging
 import time
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 import aiohttp
 
@@ -64,7 +65,10 @@ def _parse_product(raw: dict) -> Product | None:
         name=html.unescape((raw.get("name") or "").strip()),
         price=price,
         regular_price=regular,
-        url=raw.get("permalink") or "",
+        # Раскодируем %-энкодинг кириллицы в permalink: ссылка становится читаемой
+        # (…/product/51-белая-роза-кения-в-оформлении/) и короткой — и Telegram, и
+        # веб-виджет линкуют её корректно; длинный «%d0%b1…»-хвост пугал клиентов.
+        url=unquote(raw.get("permalink") or ""),
         categories=[c.get("name", "") for c in raw.get("categories", []) if c.get("name")],
         in_stock=raw.get("is_in_stock", True),
     )

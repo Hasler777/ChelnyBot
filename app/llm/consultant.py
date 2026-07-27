@@ -55,7 +55,10 @@ async def _guard_reply(tg_id: int, text: str, offered: list[Product],
     которой НЕТ среди реальных товаров каталога (модель сочинила URL или
     повторила фейк из истории диалога) — подменяем на реальный список.
     Работает даже когда модель не делала свежий поиск в этом ходе."""
-    urls = _SHOP_URL_RE.findall(text)
+    # Проверяем только ТОВАРНЫЕ ссылки (/product/…): именно их модель может выдумать.
+    # Ссылки на каталог/акции/категории (/shop/, /product-category/…) — легальные
+    # витринные страницы, их НЕ трогаем, иначе гвард затрёт правильный ответ.
+    urls = [u for u in _SHOP_URL_RE.findall(text) if "/product/" in u]
     if not urls:
         return text
     valid = await catalog.known_urls()
