@@ -55,6 +55,27 @@ async def on_start(message: Message, command: CommandObject) -> None:
     await storage.add_message(tg_id, "assistant", GREETING)
 
 
+async def _run_consult(tg_id: int, text: str, *, media_url: str | None = None,
+                       media_type: str | None = None, media_name: str | None = None) -> str:
+    """Один ход консультации: генерация ответа + сохранение (вопрос->ответ) +
+    возможный хэндофф. Возвращает текст ответа клиенту. media_* — если сообщение
+    сопровождалось фото/файлом (сохраняем их на сообщении клиента для админки)."""
+    try:
+        result = await consultant.generate(tg_id, text)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Ошибка генерации ответа: %s", exc)
+        return FALLBACK_ERROR
+    await storage.add_message(tg_id, "user", text, media_url=media_url,
+                              media_type=media_type, media_name=media_name)
+    if result.handoff is not None:
+        reply = await handoff.do_handoff(tg_id, result.handoff)
+        await storage.add_message(tg_id, "assistant", reply)
+        return reply
+    reply = result.text or FALLBACK_ERROR
+    await storage.add_message(tg_id, "assistant", reply)
+    return reply
+
+
 @router.message(F.text)
 async def on_text(message: Message) -> None:
     tg_id = message.from_user.id
@@ -68,25 +89,8 @@ async def on_text(message: Message) -> None:
             await handoff.forward_client_message(tg_id, text)
             return
 
-        try:
-            result = await consultant.generate(tg_id, text)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("Ошибка генерации ответа: %s", exc)
-            await message.answer(FALLBACK_ERROR)
-            return
-
-        # сохраняем ход диалога после генерации (порядок: вопрос -> ответ)
-        await storage.add_message(tg_id, "user", text)
-
-        if result.handoff is not None:
-            reply = await handoff.do_handoff(tg_id, result.handoff)
-            await storage.add_message(tg_id, "assistant", reply)
-            await message.answer(reply)
-            return
-
-        reply = result.text or FALLBACK_ERROR
-        await storage.add_message(tg_id, "assistant", reply)
-        await message.answer(reply, disable_web_page_preview=False)
+        reply = await _run_consult(tg_id, text)
+    await message.answer(reply, disable_web_page_preview=False)
 
 
 async def _extract_tg_media(message: Message) -> tuple[bytes, str, str, str | None] | None:
@@ -117,23 +121,34 @@ async def _extract_tg_media(message: Message) -> tuple[bytes, str, str, str | No
 
 @router.message()
 async def on_other(message: Message) -> None:
-    """Нетекстовые сообщения (фото/файлы). В handoff — пересылаем медиа флористу."""
+    """Нетекстовые сообщения (фото/файлы). В handoff — пересылаем медиа флористу;
+    в режиме бота — реагируем на фото (LLM) и предлагаем собрать похожий."""
     tg_id = message.from_user.id
     user = await storage.get_or_create_user(tg_id)
-    if user.state != STATE_HANDOFF:
-        await message.answer("Напишите, пожалуйста, текстом — что хотите подобрать? 🌷")
+    got = await _extract_tg_media(message)
+    caption = (message.caption or "").strip()
+
+    if user.state == STATE_HANDOFF:
+        if not got:
+            await handoff.forward_client_message(tg_id, "[вложение]")
+            return
+        data, media_type, fname, ctype = got
+        _, purl = media.save_bytes(data, content_type=ctype, file_name=fname)
+        content = caption or ("📷 фото" if media_type == "image" else f"📎 файл: {fname}")
+        await handoff.forward_client_message(
+            tg_id, content, media_url=purl, media_type=media_type,
+            file_name=fname, file_size=len(data))
         return
 
-    got = await _extract_tg_media(message)
+    # режим бота: на фото/файл реагируем через LLM (не «напишите текстом»)
     if not got:
-        # не смогли получить файл (большой/неподдерживаемый) — хотя бы отметим текстом
-        await handoff.forward_client_message(tg_id, "[вложение]")
+        await message.answer("Напишите, пожалуйста, текстом — что хотите подобрать? 🌷")
         return
     data, media_type, fname, ctype = got
     _, purl = media.save_bytes(data, content_type=ctype, file_name=fname)
-    caption = (message.caption or "").strip()
-    content = caption or ("📷 фото" if media_type == "image" else f"📎 файл: {fname}")
-    await handoff.forward_client_message(
-        tg_id, content, media_url=purl, media_type=media_type,
-        file_name=fname, file_size=len(data),
-    )
+    marker = "[клиент прислал фото букета]" if media_type == "image" else "[клиент прислал файл]"
+    synth = f"{caption} {marker}".strip() if caption else marker
+    async with _lock_for(tg_id):
+        reply = await _run_consult(tg_id, synth, media_url=purl,
+                                   media_type=media_type, media_name=fname)
+    await message.answer(reply, disable_web_page_preview=False)

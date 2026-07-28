@@ -175,35 +175,41 @@ async def web_message(request: web.Request) -> web.Response:
             status=429,
             headers=headers,
         )
+    out = await _web_consult_turn(uid, text)
+    return web.json_response(out, headers=headers)
 
-    # тот же порядок обработки, что и в Telegram-хэндлере on_text
+
+async def _web_consult_turn(uid: int, text: str, *, media_url: str | None = None,
+                            media_type: str | None = None,
+                            media_name: str | None = None) -> dict:
+    """Один ход веб-консультации (тот же порядок, что on_text в Telegram): в handoff —
+    пересылаем менеджеру (с медиа), иначе генерация + сохранение + возможный хэндофф.
+    Возвращает dict для JSON-ответа."""
     async with _lock_for(uid):
         user = await storage.get_or_create_user(uid, channel="web")
 
-        # режим живого чата с флористом — Соня молчит, пересылаем менеджеру
         if user.state == STATE_HANDOFF:
-            await handoff.forward_client_message(uid, text)
-            return web.json_response({"ok": True, "mode": "handoff"}, headers=headers)
+            await handoff.forward_client_message(uid, text, media_url=media_url,
+                                                 media_type=media_type, file_name=media_name)
+            return {"ok": True, "mode": "handoff"}
 
         try:
             result = await consultant.generate(uid, text)
         except Exception as exc:  # noqa: BLE001
             log.exception("web: ошибка генерации ответа: %s", exc)
-            return web.json_response({"reply": FALLBACK_ERROR}, headers=headers)
+            return {"reply": FALLBACK_ERROR}
 
-        await storage.add_message(uid, "user", text)
+        await storage.add_message(uid, "user", text, media_url=media_url,
+                                  media_type=media_type, media_name=media_name)
 
         if result.handoff is not None:
-            # создаём сделку/контакт/чат в amoCRM — ровно как в Telegram
             reply = await handoff.do_handoff(uid, result.handoff)
             await storage.add_message(uid, "assistant", reply)
-            return web.json_response(
-                {"reply": reply, "handoff": True}, headers=headers
-            )
+            return {"reply": reply, "handoff": True}
 
         reply = result.text or FALLBACK_ERROR
         await storage.add_message(uid, "assistant", reply)
-        return web.json_response({"reply": reply}, headers=headers)
+        return {"reply": reply}
 
 
 async def web_upload(request: web.Request) -> web.Response:
@@ -254,13 +260,12 @@ async def web_upload(request: web.Request) -> web.Response:
             file_name=file_name, file_size=len(data))
         return web.json_response({"ok": True, "media_url": purl, "media_type": media_type},
                                  headers=headers)
-    # в режиме бота фото не обрабатываем LLM — сохраняем для админки и мягко просим текст
-    await storage.add_message(uid, "user", label, media_url=purl,
-                              media_type=media_type, media_name=file_name)
-    return web.json_response(
-        {"ok": True, "media_url": purl, "media_type": media_type,
-         "reply": "Напишите, пожалуйста, текстом — что хотите подобрать? 🌷"},
-        headers=headers)
+    # в режиме бота реагируем на фото через LLM (предложим собрать похожий)
+    marker = "[клиент прислал фото букета]" if media_type == "image" else "[клиент прислал файл]"
+    out = await _web_consult_turn(uid, marker, media_url=purl,
+                                  media_type=media_type, media_name=file_name)
+    out.update({"ok": True, "media_url": purl, "media_type": media_type})
+    return web.json_response(out, headers=headers)
 
 
 async def web_stream(request: web.Request) -> web.StreamResponse:

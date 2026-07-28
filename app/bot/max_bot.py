@@ -183,30 +183,54 @@ class MaxBot:
         await self._on_text(uid, text)
 
     async def _on_media(self, uid: int, attachments: list) -> None:
-        """Вложение от клиента MAX. В handoff — перехостим и пересылаем флористу."""
-        user = await storage.get_or_create_user(uid, channel="max")
-        if user.state != STATE_HANDOFF:
-            await self.send_message(uid, _NON_TEXT_HINT)
-            return
-        att = attachments[0] or {}
-        payload = att.get("payload") or {}
-        url = payload.get("url") or payload.get("link")
-        if not url:
-            log.warning("MAX: вложение без прямого url (%s) — пересылаю заглушкой", att)
-            await handoff.forward_client_message(uid, "[вложение]")
-            return
-        atype = (att.get("type") or "").lower()
-        media_type = "image" if atype in ("image", "photo", "picture") else "file"
-        saved = await media.save_from_url(url, headers={"Authorization": self._token})
-        if not saved:
-            await handoff.forward_client_message(uid, "[вложение]")
-            return
-        _, purl, fsize, ct = saved
-        content = "📷 фото" if media_type == "image" else "📎 файл"
-        await handoff.forward_client_message(
-            uid, content, media_url=purl, media_type=media_type,
-            file_name=url.split("/")[-1].split("?")[0] or "file", file_size=fsize,
-        )
+        """Вложение от клиента MAX. В handoff — перехостим и пересылаем флористу;
+        в режиме бота — реагируем на фото через LLM (предложим собрать похожий)."""
+        async with self._lock_for(uid):
+            user = await storage.get_or_create_user(uid, channel="max")
+            if not user.context_since:
+                await self._greet(uid)
+                user = await storage.get_or_create_user(uid, channel="max")
+
+            att = attachments[0] or {}
+            payload = att.get("payload") or {}
+            url = payload.get("url") or payload.get("link")
+            atype = (att.get("type") or "").lower()
+            media_type = "image" if atype in ("image", "photo", "picture") else "file"
+            purl = fsize = None
+            if url:
+                saved = await media.save_from_url(url, headers={"Authorization": self._token})
+                if saved:
+                    _, purl, fsize, _ct = saved
+
+            if user.state == STATE_HANDOFF:
+                if purl:
+                    content = "📷 фото" if media_type == "image" else "📎 файл"
+                    await handoff.forward_client_message(
+                        uid, content, media_url=purl, media_type=media_type,
+                        file_name="file", file_size=fsize)
+                else:
+                    await handoff.forward_client_message(uid, "[вложение]")
+                return
+
+            # режим бота — реагируем через LLM
+            marker = ("[клиент прислал фото букета]" if media_type == "image"
+                      else "[клиент прислал файл]")
+            try:
+                result = await consultant.generate(uid, marker)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("MAX: ошибка генерации ответа на медиа: %s", exc)
+                await self.send_message(uid, FALLBACK_ERROR)
+                return
+            await storage.add_message(uid, "user", marker, media_url=purl,
+                                      media_type=media_type, media_name="file")
+            if result.handoff is not None:
+                reply = await handoff.do_handoff(uid, result.handoff)
+                await storage.add_message(uid, "assistant", reply)
+                await self.send_message(uid, reply)
+                return
+            reply = result.text or FALLBACK_ERROR
+            await storage.add_message(uid, "assistant", reply)
+            await self.send_message(uid, reply)
 
     @staticmethod
     def _uid_from(max_user_id) -> int | None:
