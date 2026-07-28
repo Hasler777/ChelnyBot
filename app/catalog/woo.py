@@ -33,14 +33,23 @@ class Product:
     categories: list[str]
     in_stock: bool
 
+    @property
+    def on_sale(self) -> bool:
+        return self.regular_price > self.price > 0
+
     def as_dict(self) -> dict:
-        return {
+        d = {
             "id": self.id,
             "name": self.name,
             "price": int(self.price),
             "url": self.url,
             "categories": self.categories,
         }
+        # По акции: отдаём старую цену, чтобы бот мог показать «X ₽ вместо Y ₽».
+        if self.on_sale:
+            d["regular_price"] = int(self.regular_price)
+            d["on_sale"] = True
+        return d
 
 
 def _to_rubles(amount: str | None, minor_unit: int) -> float:
@@ -129,11 +138,15 @@ class Catalog:
         query: str | None = None,
         limit: int = 3,
         exclude_urls: set[str] | None = None,
+        on_sale: bool = False,
     ) -> list[Product]:
         """Подбор товаров по бюджету и текстовому запросу.
 
         Сортировка: сначала наиболее релевантные по запросу, затем ближе к верхней
         границе бюджета (чтобы предлагать что-то побогаче, но в рамках бюджета).
+
+        on_sale=True — вернуть только товары со скидкой (для вопросов про акции):
+        реальные акционные товары каталога с ценой ниже обычной.
         """
         # Модель часто шлёт 0 (или отрицательное) как «бюджет не задан» — нельзя
         # понимать это как потолок 0 ₽, иначе из каталога отфильтруется ВСЁ.
@@ -144,6 +157,10 @@ class Catalog:
 
         await self._ensure_fresh()
         items = [p for p in self._products if p.in_stock]
+
+        # Только акционные товары (цена ниже обычной) — для вопросов про акции/скидки.
+        if on_sale:
+            items = [p for p in items if p.on_sale]
 
         # Исключаем из подбора аксессуары-допы (шары, игрушки, сладости): это товары
         # для допродажи, а не букеты. Иначе как самые дешёвые они всплывают в «популярных»

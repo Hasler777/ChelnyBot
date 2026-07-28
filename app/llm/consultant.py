@@ -144,6 +144,7 @@ async def _run_search(args: dict, exclude_urls: set[str] | None = None) -> tuple
         query=args.get("query"),
         limit=3,
         exclude_urls=exclude_urls,
+        on_sale=bool(args.get("on_sale")),
     )
     if not products:
         return json.dumps({"products": [], "note": "ничего не найдено в этом бюджете"},
