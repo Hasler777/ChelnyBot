@@ -28,7 +28,7 @@ from app.bot.texts import FALLBACK_ERROR, GREETING
 from app.config import settings
 from app.db.storage import STATE_HANDOFF, storage
 from app.llm import consultant
-from app.services import handoff
+from app.services import handoff, media
 
 log = logging.getLogger(__name__)
 
@@ -53,14 +53,17 @@ def _lock_for(uid: int) -> asyncio.Lock:
     return lock
 
 
-async def push_to_web(uid: int, text: str) -> None:
-    """Разослать текст (ответ флориста) во все открытые SSE-соединения посетителя."""
+async def push_to_web(uid: int, payload) -> None:
+    """Разослать сообщение флориста во все открытые SSE-соединения посетителя.
+
+    payload — строка (только текст) или dict {text, media_url, media_type}."""
     queues = _subscribers.get(uid)
     if not queues:
         return
+    item = {"text": payload} if isinstance(payload, str) else dict(payload)
     for q in list(queues):
         try:
-            q.put_nowait(text)
+            q.put_nowait(item)
         except asyncio.QueueFull:  # pragma: no cover — очередь без лимита
             pass
 
@@ -133,7 +136,8 @@ async def web_start(request: web.Request) -> web.Response:
     since = user.context_since if user else 0
     rows = await storage.history_full(uid, limit=200, since=since)
     messages = [
-        {"from": _ROLE_MAP.get(r["role"], r["role"]), "text": r["content"], "ts": r["ts"]}
+        {"from": _ROLE_MAP.get(r["role"], r["role"]), "text": r["content"], "ts": r["ts"],
+         "media_url": r.get("media_url"), "media_type": r.get("media_type")}
         for r in rows
     ]
     return web.json_response(
@@ -202,6 +206,63 @@ async def web_message(request: web.Request) -> web.Response:
         return web.json_response({"reply": reply}, headers=headers)
 
 
+async def web_upload(request: web.Request) -> web.Response:
+    """Загрузка файла из веб-виджета (multipart: uuid + file). В handoff —
+    пересылаем флористу в amoCRM; иначе просто сохраняем и просим написать текстом."""
+    headers = _cors_headers(request)
+    if not settings.web_enabled:
+        return web.json_response({"error": "disabled"}, status=403, headers=headers)
+    try:
+        reader = await request.multipart()
+    except Exception:  # noqa: BLE001
+        return web.json_response({"error": "bad form"}, status=400, headers=headers)
+
+    uuid = ""
+    data = bytearray()
+    file_name = "file"
+    content_type = None
+    async for field in reader:
+        if field.name == "uuid":
+            uuid = (await field.text()).strip()
+        elif field.name == "file":
+            file_name = field.filename or "file"
+            content_type = field.headers.get("Content-Type")
+            while True:
+                chunk = await field.read_chunk(64 * 1024)
+                if not chunk:
+                    break
+                data += chunk
+                if len(data) > settings.media_max_bytes:
+                    return web.json_response({"error": "too big"}, status=413, headers=headers)
+    if not uuid or not data:
+        return web.json_response({"error": "bad request"}, status=400, headers=headers)
+    if not (media.is_image(content_type) or media.is_image(file_name)
+            or (file_name.rsplit(".", 1)[-1].lower() in media._FILE_EXT)):
+        return web.json_response({"error": "bad type"}, status=415, headers=headers)
+
+    uid, _ = await storage.web_session_uid(uuid)
+    if not _rate_ok(uid):
+        return web.json_response({"error": "rate"}, status=429, headers=headers)
+    _, purl = media.save_bytes(bytes(data), content_type=content_type, file_name=file_name)
+    media_type = "image" if (media.is_image(content_type) or media.is_image(file_name)) else "file"
+
+    user = await storage.get_or_create_user(uid, channel="web")
+    label = "📷 фото" if media_type == "image" else f"📎 файл: {file_name}"
+    if user.state == STATE_HANDOFF:
+        await handoff.forward_client_message(
+            uid, label, media_url=purl, media_type=media_type,
+            file_name=file_name, file_size=len(data))
+        return web.json_response({"ok": True, "media_url": purl, "media_type": media_type},
+                                 headers=headers)
+    # в режиме бота фото не обрабатываем LLM — сохраняем для админки и мягко просим текст
+    await storage.add_message(uid, "user", label, media_url=purl,
+                              media_type=media_type, media_name=file_name)
+    return web.json_response(
+        {"ok": True, "media_url": purl, "media_type": media_type,
+         "reply": "Напишите, пожалуйста, текстом — что хотите подобрать? 🌷"},
+        headers=headers)
+
+
 async def web_stream(request: web.Request) -> web.StreamResponse:
     """SSE: держим соединение и шлём в браузер ответы флориста (режим handoff)."""
     uuid = (request.query.get("uuid") or "").strip()
@@ -228,12 +289,16 @@ async def web_stream(request: web.Request) -> web.StreamResponse:
         await resp.write(b": connected\n\n")
         while True:
             try:
-                text = await asyncio.wait_for(queue.get(), timeout=25)
+                item = await asyncio.wait_for(queue.get(), timeout=25)
             except asyncio.TimeoutError:
                 await resp.write(b": ping\n\n")  # heartbeat, чтобы соединение жило
                 continue
+            if isinstance(item, str):
+                item = {"text": item}
             payload = json.dumps(
-                {"from": "manager", "text": text, "ts": time.time()},
+                {"from": "manager", "text": item.get("text", ""),
+                 "media_url": item.get("media_url"), "media_type": item.get("media_type"),
+                 "ts": time.time()},
                 ensure_ascii=False,
             )
             await resp.write(f"data: {payload}\n\n".encode("utf-8"))
@@ -285,12 +350,14 @@ async def web_chat(request: web.Request) -> web.Response:
 def add_web_routes(app: web.Application) -> None:
     app.router.add_post("/web/start", web_start)
     app.router.add_post("/web/message", web_message)
+    app.router.add_post("/web/upload", web_upload)
     app.router.add_get("/web/stream", web_stream)
     app.router.add_get("/web/widget.js", web_widget_js)
     app.router.add_get("/web/demo", web_demo)
     app.router.add_get("/web/chat", web_chat)
     app.router.add_route("OPTIONS", "/web/start", _preflight)
     app.router.add_route("OPTIONS", "/web/message", _preflight)
+    app.router.add_route("OPTIONS", "/web/upload", _preflight)
 
 
 # =====================================================================
@@ -373,6 +440,9 @@ _WIDGET_JS = r"""
     width:44px;height:40px;cursor:pointer;font-size:17px;display:flex;align-items:center;justify-content:center;}
   .snya-send:hover{filter:brightness(1.05);}
   .snya-send:disabled{opacity:.5;cursor:default;}
+  .snya-clip{flex:0 0 34px;height:40px;border:none;background:transparent;font-size:19px;cursor:pointer;opacity:.65;}
+  .snya-clip:hover{opacity:1;}
+  .snya-img{max-width:200px;max-height:200px;border-radius:12px;display:block;cursor:pointer;}
   @media (max-width:480px){
     .snya-panel{left:0;right:0;bottom:0;width:100%;max-width:100%;height:82vh;max-height:82vh;
       border-radius:16px 16px 0 0;}
@@ -403,6 +473,8 @@ _WIDGET_JS = r"""
       <div class="snya-log"></div>
       <div class="snya-typing">Соня печатает…</div>
       <div class="snya-foot">
+        <button class="snya-clip" title="Прикрепить фото">📎</button>
+        <input type="file" class="snya-file" accept="image/*,.pdf" style="display:none">
         <textarea class="snya-in" placeholder="Напишите сообщение…" rows="1"></textarea>
         <button class="snya-send">➤</button>
       </div>
@@ -429,11 +501,19 @@ _WIDGET_JS = r"""
   function atBottom(){ return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80; }
   function scroll(){ logEl.scrollTop = logEl.scrollHeight; }
 
-  function addMsg(from, text, ts){
+  function addMsg(from, text, ts, media_url, media_type){
     var stick = atBottom();
     var row = document.createElement('div');
     row.className = 'snya-row ' + (from === 'me' ? 'me' : from);
-    row.innerHTML = '<div class="snya-b">' + linkify(text) + '</div>';
+    var inner = '';
+    if (media_url){
+      var isImg = media_type === 'image' || /\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(media_url);
+      inner += isImg
+        ? '<a href="'+esc(media_url)+'" target="_blank" rel="noopener"><img class="snya-img" src="'+esc(media_url)+'"></a>'
+        : '<a class="snya-b" href="'+esc(media_url)+'" target="_blank" rel="noopener">📎 файл</a>';
+    }
+    if (text) inner += '<div class="snya-b">' + linkify(text) + '</div>';
+    row.innerHTML = inner;
     logEl.appendChild(row);
     if (stick) scroll();
     if (ts && ts > seenTs) seenTs = ts;
@@ -459,7 +539,7 @@ _WIDGET_JS = r"""
     try {
       var data = await api('/web/start', {uuid: UUID});
       logEl.innerHTML = '';
-      (data.messages || []).forEach(function(m){ addMsg(m.from, m.text, m.ts); });
+      (data.messages || []).forEach(function(m){ addMsg(m.from, m.text, m.ts, m.media_url, m.media_type); });
       scroll();
     } catch(e){ addMsg('bot', 'Не удалось загрузить чат. Обновите страницу, пожалуйста.'); }
     openStream();
@@ -472,7 +552,7 @@ _WIDGET_JS = r"""
       es.onmessage = function(ev){
         try {
           var m = JSON.parse(ev.data);
-          if (m && m.text){ addMsg('manager', m.text, m.ts); bumpUnread(); }
+          if (m && (m.text || m.media_url)){ addMsg('manager', m.text, m.ts, m.media_url, m.media_type); bumpUnread(); }
         } catch(e){}
       };
       es.onerror = function(){ /* EventSource сам переподключится */ };
@@ -504,6 +584,24 @@ _WIDGET_JS = r"""
       start(); setTimeout(function(){ input.focus(); scroll(); }, 50);
     }
   }
+
+  var clip = root.querySelector('.snya-clip');
+  var fileInput = root.querySelector('.snya-file');
+  clip.addEventListener('click', function(){ fileInput.click(); });
+  fileInput.addEventListener('change', async function(){
+    var file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (!file) return;
+    if (file.size > 20*1024*1024){ addMsg('bot', 'Файл слишком большой (до 20 МБ).'); return; }
+    var isImg = /^image\//.test(file.type);
+    addMsg('me', '', 0, isImg ? URL.createObjectURL(file) : null, isImg ? 'image' : 'file'); scroll();
+    var fd = new FormData(); fd.append('uuid', UUID); fd.append('file', file);
+    try {
+      var r = await fetch(API + '/web/upload', { method:'POST', body: fd });
+      var data = await r.json();
+      if (data && data.reply) addMsg('bot', data.reply, data.ts);
+    } catch(e){ addMsg('bot', 'Не удалось отправить файл.'); }
+  });
 
   btn.addEventListener('click', toggle);
   root.querySelector('.snya-x').addEventListener('click', function(){ root.classList.remove('snya-open'); });
@@ -619,6 +717,7 @@ _CHAT_HTML = r"""<!DOCTYPE html>
   .row.bot .b,.row.manager .b{ background:#fff; color:var(--ink); border:1px solid var(--line);
     border-bottom-left-radius:5px; box-shadow:0 2px 6px rgba(23,23,26,.04); }
   .row.manager .b{ border-left:3px solid var(--red); }
+  .cimg{ max-width:240px; max-height:240px; border-radius:14px; display:block; cursor:pointer; }
   .b a{ color:var(--red-ink); text-decoration:underline; text-underline-offset:2px; font-weight:600; }
   .row.me .b a{ color:#fff; }
 
@@ -726,9 +825,14 @@ _CHAT_HTML = r"""<!DOCTYPE html>
     return '<a href="'+u+'" target="_blank" rel="noopener">'+u+'</a>'; }); }
   function atBottom(){ return logEl.scrollHeight-logEl.scrollTop-logEl.clientHeight<80; }
   function scroll(){ logEl.scrollTop=logEl.scrollHeight; }
-  function addMsg(from,text){ var stick=atBottom();
+  function addMsg(from,text,ts,media_url,media_type){ var stick=atBottom();
     var row=document.createElement('div'); row.className='row '+(from==='me'?'me':from);
-    row.innerHTML='<div class="b">'+linkify(text)+'</div>'; logEl.appendChild(row);
+    var inner='';
+    if(media_url){ var isImg=media_type==='image'||/\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(media_url);
+      inner+= isImg ? '<a href="'+esc(media_url)+'" target="_blank" rel="noopener"><img class="cimg" src="'+esc(media_url)+'"></a>'
+                    : '<a class="b" href="'+esc(media_url)+'" target="_blank" rel="noopener">📎 файл</a>'; }
+    if(text) inner+='<div class="b">'+linkify(text)+'</div>';
+    row.innerHTML=inner; logEl.appendChild(row);
     if(stick) scroll(); }
   function setTyping(on){ typingEl.style.display=on?'block':'none'; if(on) scroll(); }
   async function api(path,body){ var r=await fetch(API+path,{method:'POST',
@@ -736,11 +840,11 @@ _CHAT_HTML = r"""<!DOCTYPE html>
 
   async function start(){
     try{ var d=await api('/web/start',{uuid:UUID}); logEl.innerHTML='';
-      (d.messages||[]).forEach(function(m){ addMsg(m.from,m.text); }); scroll();
+      (d.messages||[]).forEach(function(m){ addMsg(m.from,m.text,m.ts,m.media_url,m.media_type); }); scroll();
     }catch(e){ addMsg('bot','Не удалось загрузить чат. Обновите страницу.'); }
     try{ var es=new EventSource(API+'/web/stream?uuid='+encodeURIComponent(UUID));
       es.onmessage=function(ev){ try{ var m=JSON.parse(ev.data);
-        if(m&&m.text) addMsg('manager',m.text); }catch(e){} }; }catch(e){}
+        if(m&&(m.text||m.media_url)) addMsg('manager',m.text,m.ts,m.media_url,m.media_type); }catch(e){} }; }catch(e){}
   }
   async function send(){ var text=input.value.trim(); if(!text) return;
     input.value=''; input.style.height='44px'; addMsg('me',text); scroll();

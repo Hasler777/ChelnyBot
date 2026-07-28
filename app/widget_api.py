@@ -56,7 +56,8 @@ async def get_messages(request: web.Request) -> web.Response:
 
     rows = await storage.history_full(user.tg_id, limit=300)
     messages = [
-        {"from": _ROLE_MAP.get(r["role"], r["role"]), "text": r["content"], "ts": r["ts"]}
+        {"from": _ROLE_MAP.get(r["role"], r["role"]), "text": r["content"], "ts": r["ts"],
+         "media_url": r.get("media_url"), "media_type": r.get("media_type")}
         for r in rows
     ]
     return web.json_response(

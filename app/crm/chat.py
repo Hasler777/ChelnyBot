@@ -124,13 +124,12 @@ async def create_chat(*, tg_id: int, name: str, phone: str | None = None) -> str
     return resp.get("id") if isinstance(resp, dict) else None
 
 
-async def send_to_amo(*, tg_id: int, text: str, name: str, phone: str | None = None) -> dict:
-    """Отправить сообщение клиента в amoCRM (входящее в чат)."""
+def _message_event(tg_id: int, name: str, phone: str | None, message: dict) -> dict:
     now = time.time()
     profile: dict = {}
     if phone:
         profile["phone"] = phone
-    payload = {
+    return {
         "event_type": "new_message",
         "payload": {
             "timestamp": int(now),
@@ -142,9 +141,34 @@ async def send_to_amo(*, tg_id: int, text: str, name: str, phone: str | None = N
                 "name": name or "Клиент",
                 "profile": profile,
             },
-            "message": {"type": "text", "text": text},
+            "message": message,
             "silent": False,
         },
     }
+
+
+async def send_to_amo(*, tg_id: int, text: str, name: str, phone: str | None = None,
+                      media_url: str | None = None, media_type: str | None = None,
+                      file_name: str | None = None, file_size: int | None = None) -> dict:
+    """Отправить сообщение клиента в amoCRM (входящее в чат).
+
+    Без media_url — обычное текстовое. С media_url — медиа-сообщение amoJo
+    (type picture для картинок, иначе file). Если есть и медиа, и подпись —
+    шлём медиа, затем подпись отдельным текстовым событием."""
     path = f"/v2/origin/custom/{settings.amojo_scope_id}"
-    return await _post(path, payload)
+    if media_url:
+        msg: dict = {
+            "type": "picture" if media_type == "image" else "file",
+            "media": media_url,
+            "file_name": file_name or "file",
+        }
+        if file_size:
+            msg["file_size"] = int(file_size)
+        resp = await _post(path, _message_event(tg_id, name, phone, msg))
+        caption = (text or "").strip()
+        if caption and not caption.startswith(("📷", "📎")):
+            await _post(path, _message_event(tg_id, name, phone,
+                                             {"type": "text", "text": caption}))
+        return resp
+    return await _post(path, _message_event(tg_id, name, phone,
+                                            {"type": "text", "text": text}))

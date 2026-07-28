@@ -135,6 +135,9 @@ class Storage:
             "ALTER TABLE users ADD COLUMN reminder_sent REAL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN channel TEXT NOT NULL DEFAULT 'tg'",
             "ALTER TABLE users ADD COLUMN utm_source TEXT",
+            "ALTER TABLE messages ADD COLUMN media_url TEXT",
+            "ALTER TABLE messages ADD COLUMN media_type TEXT",
+            "ALTER TABLE messages ADD COLUMN media_name TEXT",
         ):
             try:
                 await self._db.execute(ddl)
@@ -273,10 +276,13 @@ class Storage:
         )
         await self.db.commit()
 
-    async def add_message(self, tg_id: int, role: str, content: str) -> None:
+    async def add_message(self, tg_id: int, role: str, content: str,
+                          media_url: str | None = None, media_type: str | None = None,
+                          media_name: str | None = None) -> None:
         await self.db.execute(
-            "INSERT INTO messages (tg_id, role, content, ts) VALUES (?, ?, ?, ?)",
-            (tg_id, role, content, time.time()),
+            "INSERT INTO messages (tg_id, role, content, ts, media_url, media_type, media_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tg_id, role, content, time.time(), media_url, media_type, media_name),
         )
         # клиент снова написал — снимаем метку напоминания, чтобы при новой
         # паузе бот смог напомнить ещё раз
@@ -317,13 +323,19 @@ class Storage:
         """Полная история с временем и id (для админки). since>0 — только текущая
         сессия (например, транскрипт заказа флористу)."""
         cur = await self.db.execute(
-            "SELECT id, role, content, ts FROM messages WHERE tg_id = ? AND ts >= ? "
-            "ORDER BY id DESC LIMIT ?",
+            "SELECT id, role, content, ts, media_url, media_type, media_name "
+            "FROM messages WHERE tg_id = ? AND ts >= ? ORDER BY id DESC LIMIT ?",
             (tg_id, since, limit),
         )
         rows = await cur.fetchall()
+        keys = rows[0].keys() if rows else []
         return [
-            {"id": r["id"], "role": r["role"], "content": r["content"], "ts": r["ts"]}
+            {
+                "id": r["id"], "role": r["role"], "content": r["content"], "ts": r["ts"],
+                "media_url": r["media_url"] if "media_url" in keys else None,
+                "media_type": r["media_type"] if "media_type" in keys else None,
+                "media_name": r["media_name"] if "media_name" in keys else None,
+            }
             for r in reversed(rows)
         ]
 

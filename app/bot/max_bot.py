@@ -28,7 +28,7 @@ from app.db.storage import (
     storage,
 )
 from app.llm import consultant
-from app.services import handoff
+from app.services import handoff, media
 
 log = logging.getLogger("sonya.max")
 
@@ -87,6 +87,14 @@ class MaxBot:
                     log.warning("MAX send -> %s: %s", resp.status, body)
         except Exception as exc:  # noqa: BLE001
             log.exception("MAX: не удалось отправить сообщение uid=%s: %s", uid, exc)
+
+    async def send_media(self, uid: int, media_url: str, media_type: str | None,
+                         caption: str = "") -> None:
+        """Отправить медиа пользователю MAX. Пока — ссылкой в тексте (клиент откроет
+        фото по ссылке): нативная загрузка вложений MAX требует подтверждения
+        эндпоинтов и добавится отдельно. Так канал остаётся рабочим."""
+        parts = [p for p in [(caption or "").strip(), media_url] if p]
+        await self.send_message(uid, "\n".join(parts))
 
     # ---------- обработка входящих ----------
     async def _greet(self, uid: int) -> None:
@@ -163,11 +171,42 @@ class MaxBot:
         if text == "/start":
             await self._greet(uid)
             return
+
+        attachments = body.get("attachments") or []
+        if not text and attachments:
+            await self._on_media(uid, attachments)
+            return
         if not text:
             await self.send_message(uid, _NON_TEXT_HINT)
             return
 
         await self._on_text(uid, text)
+
+    async def _on_media(self, uid: int, attachments: list) -> None:
+        """Вложение от клиента MAX. В handoff — перехостим и пересылаем флористу."""
+        user = await storage.get_or_create_user(uid, channel="max")
+        if user.state != STATE_HANDOFF:
+            await self.send_message(uid, _NON_TEXT_HINT)
+            return
+        att = attachments[0] or {}
+        payload = att.get("payload") or {}
+        url = payload.get("url") or payload.get("link")
+        if not url:
+            log.warning("MAX: вложение без прямого url (%s) — пересылаю заглушкой", att)
+            await handoff.forward_client_message(uid, "[вложение]")
+            return
+        atype = (att.get("type") or "").lower()
+        media_type = "image" if atype in ("image", "photo", "picture") else "file"
+        saved = await media.save_from_url(url, headers={"Authorization": self._token})
+        if not saved:
+            await handoff.forward_client_message(uid, "[вложение]")
+            return
+        _, purl, fsize, ct = saved
+        content = "📷 фото" if media_type == "image" else "📎 файл"
+        await handoff.forward_client_message(
+            uid, content, media_url=purl, media_type=media_type,
+            file_name=url.split("/")[-1].split("?")[0] or "file", file_size=fsize,
+        )
 
     @staticmethod
     def _uid_from(max_user_id) -> int | None:

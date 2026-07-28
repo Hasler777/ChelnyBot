@@ -129,16 +129,22 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     return HANDOFF_MESSAGE
 
 
-async def forward_client_message(tg_id: int, text: str) -> None:
+async def forward_client_message(tg_id: int, text: str, *, media_url: str | None = None,
+                                 media_type: str | None = None, file_name: str | None = None,
+                                 file_size: int | None = None) -> None:
     """В режиме handoff — сохранить сообщение клиента (его покажет виджет в карточке)
-    и, если настроен нативный чат amoJo, продублировать туда."""
-    await storage.add_message(tg_id, "user", text)
+    и, если настроен нативный чат amoJo, продублировать туда. Поддерживает медиа
+    (фото/файл): media_url — публичная ссылка на файл (наш /media/…)."""
+    await storage.add_message(tg_id, "user", text, media_url=media_url,
+                              media_type=media_type, media_name=file_name)
 
     if settings.amojo_enabled:
         user = await storage.get_user(tg_id)
         name = (user.name if user else None) or "Клиент"
         phone = user.phone if user else None
         try:
-            await chat.send_to_amo(tg_id=tg_id, text=text, name=name, phone=phone)
+            await chat.send_to_amo(tg_id=tg_id, text=text, name=name, phone=phone,
+                                   media_url=media_url, media_type=media_type,
+                                   file_name=file_name, file_size=file_size)
         except Exception as exc:  # noqa: BLE001
             log.exception("Не удалось переслать сообщение клиента в amoJo: %s", exc)

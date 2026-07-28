@@ -9,10 +9,11 @@ from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import Message
 
 from app.bot.texts import FALLBACK_ERROR, GREETING
+from app.config import settings
 from app.crm import utm
 from app.db.storage import STATE_CONSULT, STATE_HANDOFF, storage
 from app.llm import consultant
-from app.services import handoff
+from app.services import handoff, media
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -88,11 +89,51 @@ async def on_text(message: Message) -> None:
         await message.answer(reply, disable_web_page_preview=False)
 
 
+async def _extract_tg_media(message: Message) -> tuple[bytes, str, str, str | None] | None:
+    """Скачать фото/документ из сообщения Telegram.
+
+    Возвращает (data, media_type, file_name, content_type) или None (нечего качать /
+    слишком большой файл / ошибка). media_type: 'image' | 'file'."""
+    if message.photo:
+        ph = message.photo[-1]  # самый крупный размер
+        file_id, size, media_type, fname, ctype = ph.file_id, ph.file_size, "image", "photo.jpg", "image/jpeg"
+    elif message.document:
+        doc = message.document
+        ctype = doc.mime_type
+        media_type = "image" if (ctype or "").startswith("image/") else "file"
+        file_id, size, fname = doc.file_id, doc.file_size, doc.file_name or "file"
+    else:
+        return None  # видео/стикер/голос — не поддерживаем (пока)
+    if size and size > settings.media_max_bytes:
+        return None
+    try:
+        buf = await message.bot.download(file_id)
+        data = buf.read()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Не удалось скачать вложение Telegram: %s", exc)
+        return None
+    return data, media_type, fname, ctype
+
+
 @router.message()
 async def on_other(message: Message) -> None:
-    """Нетекстовые сообщения (фото/стикеры). В handoff — игнор/пересылка-заглушка."""
-    user = await storage.get_or_create_user(message.from_user.id)
-    if user.state == STATE_HANDOFF:
-        await handoff.forward_client_message(message.from_user.id, "[вложение]")
+    """Нетекстовые сообщения (фото/файлы). В handoff — пересылаем медиа флористу."""
+    tg_id = message.from_user.id
+    user = await storage.get_or_create_user(tg_id)
+    if user.state != STATE_HANDOFF:
+        await message.answer("Напишите, пожалуйста, текстом — что хотите подобрать? 🌷")
         return
-    await message.answer("Напишите, пожалуйста, текстом — что хотите подобрать? 🌷")
+
+    got = await _extract_tg_media(message)
+    if not got:
+        # не смогли получить файл (большой/неподдерживаемый) — хотя бы отметим текстом
+        await handoff.forward_client_message(tg_id, "[вложение]")
+        return
+    data, media_type, fname, ctype = got
+    _, purl = media.save_bytes(data, content_type=ctype, file_name=fname)
+    caption = (message.caption or "").strip()
+    content = caption or ("📷 фото" if media_type == "image" else f"📎 файл: {fname}")
+    await handoff.forward_client_message(
+        tg_id, content, media_url=purl, media_type=media_type,
+        file_name=fname, file_size=len(data),
+    )

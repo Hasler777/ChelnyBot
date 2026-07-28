@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     webhook_port: int = 8080
     webhook_path: str = "/amojo/webhook"
 
+    # Медиа-файлы (фото/документы из чатов): храним на диске и раздаём по /media/<имя>.
+    # Публичный адрес берём из widget_public_url. media_dir — внутри volume data/ (не в git).
+    media_dir: str = "data/media"
+    media_max_bytes: int = 20 * 1024 * 1024  # предел на файл (Telegram Bot API ~20 МБ)
+    media_retention_days: int = 0            # 0 — хранить бессрочно
+
     # Виджет amoCRM (чат-панель в карточке сделки)
     widget_public_url: str = "https://144-31-108-55.sslip.io"
     widget_token: str = ""  # общий секрет, который виджет шлёт в запросах

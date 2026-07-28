@@ -179,7 +179,8 @@ async def _dialog_response(request: web.Request, markup: float) -> web.Response:
     if markup and markup != 1.0:
         cost = {**cost, "cost": (cost.get("cost") or 0) * markup}
     messages = [
-        {"from": _ROLE_MAP.get(r["role"], r["role"]), "text": r["content"], "ts": r["ts"]}
+        {"from": _ROLE_MAP.get(r["role"], r["role"]), "text": r["content"], "ts": r["ts"],
+         "media_url": r.get("media_url"), "media_type": r.get("media_type")}
         for r in rows
     ]
     return web.json_response(
@@ -421,6 +422,8 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .bot .bubble { background:#243244; color:#9fb3c8; border-bottom-left-radius:4px; }
   .manager .bubble { background:var(--acc); color:#fff; border-bottom-right-radius:4px; }
   .meta { font-size:10px; opacity:.6; margin:0 4px 2px; }
+  .bubble-img { max-width:220px; max-height:220px; border-radius:10px; display:block; cursor:pointer; }
+  .bubble-file { display:inline-block; padding:8px 11px; border-radius:12px; background:var(--panel2); color:#79b8ff; font-size:13px; text-decoration:none; }
   #empty { color:var(--mut); text-align:center; padding:40px 0; }
   .no-tokens .col-tokens { display:none; }
   /* анализ диалогов */
@@ -722,8 +725,16 @@ async function openDialog(tgId){
   for(const m of msgs){
     const side = m.from==='manager'?'right':'left';
     const row=document.createElement('div'); row.className='row '+side+' '+m.from;
-    row.innerHTML=`<div><div class="meta">${label(m.from)} · ${fmt(m.ts)}</div><div class="bubble"></div></div>`;
+    let mediaHtml='';
+    if(m.media_url){
+      const isImg = m.media_type==='image' || /\.(jpe?g|png|webp|gif|bmp|heic)$/i.test(m.media_url);
+      mediaHtml = isImg
+        ? `<a href="${esc(m.media_url)}" target="_blank" rel="noopener"><img class="bubble-img" src="${esc(m.media_url)}"></a>`
+        : `<a class="bubble-file" href="${esc(m.media_url)}" target="_blank" rel="noopener">📎 файл</a>`;
+    }
+    row.innerHTML=`<div><div class="meta">${label(m.from)} · ${fmt(m.ts)}</div>${mediaHtml}<div class="bubble"></div></div>`;
     row.querySelector('.bubble').textContent=m.text;
+    if(!m.text) row.querySelector('.bubble').style.display='none';
     log.appendChild(row);
   }
   log.scrollTop=0;
