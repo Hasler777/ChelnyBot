@@ -10,9 +10,9 @@ from aiogram.types import Message
 
 from app.bot.texts import (
     FALLBACK_ERROR,
-    FILE_LLM_HINT,
+    FILE_REPLY,
     GREETING,
-    PHOTO_LLM_HINT,
+    PHOTO_REPLY,
     PHOTO_STORE_LABEL,
 )
 from app.config import settings
@@ -154,12 +154,9 @@ async def on_other(message: Message) -> None:
         return
     data, media_type, fname, ctype = got
     _, purl = media.save_bytes(data, content_type=ctype, file_name=fname)
-    if media_type == "image":
-        hint, store = PHOTO_LLM_HINT, (caption or PHOTO_STORE_LABEL)
-    else:
-        hint, store = FILE_LLM_HINT, (caption or f"📎 файл: {fname}")
-    llm_text = f"{caption} {hint}" if caption else hint
-    async with _lock_for(tg_id):
-        reply = await _run_consult(tg_id, llm_text, store_text=store, media_url=purl,
-                                   media_type=media_type, media_name=fname)
-    await message.answer(reply, disable_web_page_preview=False)
+    store = caption or (PHOTO_STORE_LABEL if media_type == "image" else f"📎 файл: {fname}")
+    reply = PHOTO_REPLY if media_type == "image" else FILE_REPLY
+    await storage.add_message(tg_id, "user", store, media_url=purl,
+                              media_type=media_type, media_name=fname)
+    await storage.add_message(tg_id, "assistant", reply)
+    await message.answer(reply)

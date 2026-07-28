@@ -20,9 +20,9 @@ import aiohttp
 
 from app.bot.texts import (
     FALLBACK_ERROR,
-    FILE_LLM_HINT,
+    FILE_REPLY,
     GREETING,
-    PHOTO_LLM_HINT,
+    PHOTO_REPLY,
     PHOTO_STORE_LABEL,
 )
 from app.config import settings
@@ -218,23 +218,11 @@ class MaxBot:
                     await handoff.forward_client_message(uid, "[вложение]")
                 return
 
-            # режим бота — реагируем через LLM (видит подсказку, храним чистое)
-            hint = PHOTO_LLM_HINT if media_type == "image" else FILE_LLM_HINT
+            # режим бота — детерминированный тёплый ответ с предложением флориста
             store = PHOTO_STORE_LABEL if media_type == "image" else "📎 файл"
-            try:
-                result = await consultant.generate(uid, hint)
-            except Exception as exc:  # noqa: BLE001
-                log.exception("MAX: ошибка генерации ответа на медиа: %s", exc)
-                await self.send_message(uid, FALLBACK_ERROR)
-                return
+            reply = PHOTO_REPLY if media_type == "image" else FILE_REPLY
             await storage.add_message(uid, "user", store, media_url=purl,
                                       media_type=media_type, media_name="file")
-            if result.handoff is not None:
-                reply = await handoff.do_handoff(uid, result.handoff)
-                await storage.add_message(uid, "assistant", reply)
-                await self.send_message(uid, reply)
-                return
-            reply = result.text or FALLBACK_ERROR
             await storage.add_message(uid, "assistant", reply)
             await self.send_message(uid, reply)
 

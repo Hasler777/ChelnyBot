@@ -26,9 +26,9 @@ from aiohttp import web
 
 from app.bot.texts import (
     FALLBACK_ERROR,
-    FILE_LLM_HINT,
+    FILE_REPLY,
     GREETING,
-    PHOTO_LLM_HINT,
+    PHOTO_REPLY,
     PHOTO_STORE_LABEL,
 )
 from app.config import settings
@@ -266,13 +266,15 @@ async def web_upload(request: web.Request) -> web.Response:
             file_name=file_name, file_size=len(data))
         return web.json_response({"ok": True, "media_url": purl, "media_type": media_type},
                                  headers=headers)
-    # в режиме бота реагируем на фото через LLM (предложим собрать похожий)
-    hint = PHOTO_LLM_HINT if media_type == "image" else FILE_LLM_HINT
+    # в режиме бота — детерминированный тёплый ответ с предложением флориста
     store = PHOTO_STORE_LABEL if media_type == "image" else label
-    out = await _web_consult_turn(uid, hint, store_text=store, media_url=purl,
-                                  media_type=media_type, media_name=file_name)
-    out.update({"ok": True, "media_url": purl, "media_type": media_type})
-    return web.json_response(out, headers=headers)
+    reply = PHOTO_REPLY if media_type == "image" else FILE_REPLY
+    await storage.add_message(uid, "user", store, media_url=purl,
+                              media_type=media_type, media_name=file_name)
+    await storage.add_message(uid, "assistant", reply)
+    return web.json_response(
+        {"ok": True, "media_url": purl, "media_type": media_type, "reply": reply},
+        headers=headers)
 
 
 async def web_stream(request: web.Request) -> web.StreamResponse:
