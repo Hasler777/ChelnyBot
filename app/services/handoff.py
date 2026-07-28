@@ -93,10 +93,14 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
             since = user.context_since if user else 0
             history = await storage.history_full(tg_id, limit=80, since=since)
             role_names = {"user": "Клиент", "assistant": "Соня", "manager": "Менеджер"}
-            dialog_lines = [
-                f"{role_names.get(r['role'], r['role'])}: {r['content']}"
-                for r in history if r.get("content")
-            ]
+            dialog_lines = []
+            for r in history:
+                if not (r.get("content") or r.get("media_url")):
+                    continue
+                line = f"{role_names.get(r['role'], r['role'])}: {r.get('content') or ''}"
+                if r.get("media_url"):  # фото/файл-референс — даём ссылку флористу
+                    line += f" {r['media_url']}"
+                dialog_lines.append(line.rstrip())
             if dialog_lines:
                 transcript = "📋 Переписка клиента с Соней:\n\n" + "\n".join(dialog_lines)
                 await chat.send_to_amo(tg_id=tg_id, text=transcript,
