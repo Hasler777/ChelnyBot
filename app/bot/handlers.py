@@ -8,7 +8,13 @@ from aiogram import F, Router
 from aiogram.filters import CommandObject, CommandStart
 from aiogram.types import Message
 
-from app.bot.texts import FALLBACK_ERROR, GREETING
+from app.bot.texts import (
+    FALLBACK_ERROR,
+    FILE_LLM_HINT,
+    GREETING,
+    PHOTO_LLM_HINT,
+    PHOTO_STORE_LABEL,
+)
 from app.config import settings
 from app.crm import utm
 from app.db.storage import STATE_CONSULT, STATE_HANDOFF, storage
@@ -55,17 +61,19 @@ async def on_start(message: Message, command: CommandObject) -> None:
     await storage.add_message(tg_id, "assistant", GREETING)
 
 
-async def _run_consult(tg_id: int, text: str, *, media_url: str | None = None,
-                       media_type: str | None = None, media_name: str | None = None) -> str:
+async def _run_consult(tg_id: int, text: str, *, store_text: str | None = None,
+                       media_url: str | None = None, media_type: str | None = None,
+                       media_name: str | None = None) -> str:
     """Один ход консультации: генерация ответа + сохранение (вопрос->ответ) +
-    возможный хэндофф. Возвращает текст ответа клиенту. media_* — если сообщение
-    сопровождалось фото/файлом (сохраняем их на сообщении клиента для админки)."""
+    возможный хэндофф. Возвращает текст ответа клиенту. text — то, что видит LLM;
+    store_text (если задан) — что сохранить в историю/админку (для фото — чистое
+    «📷 фото» вместо служебной пометки). media_* — вложение на сообщении клиента."""
     try:
         result = await consultant.generate(tg_id, text)
     except Exception as exc:  # noqa: BLE001
         log.exception("Ошибка генерации ответа: %s", exc)
         return FALLBACK_ERROR
-    await storage.add_message(tg_id, "user", text, media_url=media_url,
+    await storage.add_message(tg_id, "user", store_text or text, media_url=media_url,
                               media_type=media_type, media_name=media_name)
     if result.handoff is not None:
         reply = await handoff.do_handoff(tg_id, result.handoff)
@@ -146,9 +154,12 @@ async def on_other(message: Message) -> None:
         return
     data, media_type, fname, ctype = got
     _, purl = media.save_bytes(data, content_type=ctype, file_name=fname)
-    marker = "[клиент прислал фото букета]" if media_type == "image" else "[клиент прислал файл]"
-    synth = f"{caption} {marker}".strip() if caption else marker
+    if media_type == "image":
+        hint, store = PHOTO_LLM_HINT, (caption or PHOTO_STORE_LABEL)
+    else:
+        hint, store = FILE_LLM_HINT, (caption or f"📎 файл: {fname}")
+    llm_text = f"{caption} {hint}" if caption else hint
     async with _lock_for(tg_id):
-        reply = await _run_consult(tg_id, synth, media_url=purl,
+        reply = await _run_consult(tg_id, llm_text, store_text=store, media_url=purl,
                                    media_type=media_type, media_name=fname)
     await message.answer(reply, disable_web_page_preview=False)

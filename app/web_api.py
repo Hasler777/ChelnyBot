@@ -24,7 +24,13 @@ import time
 
 from aiohttp import web
 
-from app.bot.texts import FALLBACK_ERROR, GREETING
+from app.bot.texts import (
+    FALLBACK_ERROR,
+    FILE_LLM_HINT,
+    GREETING,
+    PHOTO_LLM_HINT,
+    PHOTO_STORE_LABEL,
+)
 from app.config import settings
 from app.db.storage import STATE_HANDOFF, storage
 from app.llm import consultant
@@ -179,17 +185,17 @@ async def web_message(request: web.Request) -> web.Response:
     return web.json_response(out, headers=headers)
 
 
-async def _web_consult_turn(uid: int, text: str, *, media_url: str | None = None,
-                            media_type: str | None = None,
+async def _web_consult_turn(uid: int, text: str, *, store_text: str | None = None,
+                            media_url: str | None = None, media_type: str | None = None,
                             media_name: str | None = None) -> dict:
     """Один ход веб-консультации (тот же порядок, что on_text в Telegram): в handoff —
     пересылаем менеджеру (с медиа), иначе генерация + сохранение + возможный хэндофф.
-    Возвращает dict для JSON-ответа."""
+    text — что видит LLM; store_text — что сохранить (для фото «📷 фото»)."""
     async with _lock_for(uid):
         user = await storage.get_or_create_user(uid, channel="web")
 
         if user.state == STATE_HANDOFF:
-            await handoff.forward_client_message(uid, text, media_url=media_url,
+            await handoff.forward_client_message(uid, store_text or text, media_url=media_url,
                                                  media_type=media_type, file_name=media_name)
             return {"ok": True, "mode": "handoff"}
 
@@ -199,7 +205,7 @@ async def _web_consult_turn(uid: int, text: str, *, media_url: str | None = None
             log.exception("web: ошибка генерации ответа: %s", exc)
             return {"reply": FALLBACK_ERROR}
 
-        await storage.add_message(uid, "user", text, media_url=media_url,
+        await storage.add_message(uid, "user", store_text or text, media_url=media_url,
                                   media_type=media_type, media_name=media_name)
 
         if result.handoff is not None:
@@ -261,8 +267,9 @@ async def web_upload(request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "media_url": purl, "media_type": media_type},
                                  headers=headers)
     # в режиме бота реагируем на фото через LLM (предложим собрать похожий)
-    marker = "[клиент прислал фото букета]" if media_type == "image" else "[клиент прислал файл]"
-    out = await _web_consult_turn(uid, marker, media_url=purl,
+    hint = PHOTO_LLM_HINT if media_type == "image" else FILE_LLM_HINT
+    store = PHOTO_STORE_LABEL if media_type == "image" else label
+    out = await _web_consult_turn(uid, hint, store_text=store, media_url=purl,
                                   media_type=media_type, media_name=file_name)
     out.update({"ok": True, "media_url": purl, "media_type": media_type})
     return web.json_response(out, headers=headers)
