@@ -319,6 +319,17 @@ async def salesbot_reply(request: web.Request) -> web.Response:
         return web.json_response({"reply": reply, "handoff": False})
 
 
+async def salesbot_handler(request: web.Request) -> web.Response:
+    """Приёмник widget_request от Salesbot — ПОКА логгер: печатает сырой payload
+    (token/data/return_url), чтобы снять точный формат на живом тесте. Отвечаем 200
+    сразу (у Kommo лимит 2 сек). Реальную логику (валидация JWT → ответ ИИ → колбэк
+    на return_url) добавим, когда увидим настоящий запрос."""
+    raw = await request.text()
+    log.info("SALESBOT_HANDLER headers=%s", dict(request.headers))
+    log.info("SALESBOT_HANDLER body=%s", raw[:3000])
+    return web.json_response({"ok": True})
+
+
 async def web_stream(request: web.Request) -> web.StreamResponse:
     """SSE: держим соединение и шлём в браузер ответы флориста (режим handoff)."""
     uuid = (request.query.get("uuid") or "").strip()
@@ -408,6 +419,7 @@ def add_web_routes(app: web.Application) -> None:
     app.router.add_post("/web/message", web_message)
     app.router.add_post("/web/upload", web_upload)
     app.router.add_post("/salesbot/reply", salesbot_reply)
+    app.router.add_post("/salesbot/handler", salesbot_handler)
     app.router.add_get("/web/stream", web_stream)
     app.router.add_get("/web/widget.js", web_widget_js)
     app.router.add_get("/web/demo", web_demo)
