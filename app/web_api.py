@@ -22,6 +22,7 @@ import json
 import logging
 import time
 
+import aiohttp
 from aiohttp import web
 
 from app.bot.texts import (
@@ -319,14 +320,66 @@ async def salesbot_reply(request: web.Request) -> web.Response:
         return web.json_response({"reply": reply, "handoff": False})
 
 
+async def _salesbot_continue(return_url: str, reply: str) -> None:
+    """Продолжить Salesbot: отправить текст клиенту и завершить шаг (colбэк на
+    return_url). Пробуем с OAuth-токеном интеграции; логируем ответ, чтобы на
+    первом же тесте увидеть, работает ли формат/авторизация."""
+    body = {
+        "data": {"status": "ok"},
+        "execute_handlers": [
+            {"handler": "show", "params": {"type": "text", "value": reply}},
+        ],
+    }
+    headers = {"Content-Type": "application/json"}
+    if settings.amo_access_token:
+        headers["Authorization"] = f"Bearer {settings.amo_access_token}"
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(return_url, json=body, headers=headers,
+                              timeout=aiohttp.ClientTimeout(total=20)) as r:
+                txt = await r.text()
+                log.info("SALESBOT_HANDLER continue -> %s: %s", r.status, txt[:300])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("SALESBOT_HANDLER continue error: %s", exc)
+
+
+async def _salesbot_process(return_url: str, session: str, message: str) -> None:
+    """Фоново: ответ ИИ по сообщению клиента + колбэк в Salesbot."""
+    try:
+        uid, is_new = await storage.web_session_uid(f"sb-{session}")
+        if is_new:
+            await storage.mark_session_start(uid)
+        async with _lock_for(uid):
+            result = await consultant.generate(uid, message)
+            await storage.add_message(uid, "user", message)
+            if result.handoff is not None:
+                reply = "Передаю флористу — он подключится 🌸"
+            else:
+                reply = result.text or FALLBACK_ERROR
+            await storage.add_message(uid, "assistant", reply)
+        await _salesbot_continue(return_url, reply)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("SALESBOT_HANDLER process error: %s", exc)
+
+
 async def salesbot_handler(request: web.Request) -> web.Response:
-    """Приёмник widget_request от Salesbot — ПОКА логгер: печатает сырой payload
-    (token/data/return_url), чтобы снять точный формат на живом тесте. Отвечаем 200
-    сразу (у Kommo лимит 2 сек). Реальную логику (валидация JWT → ответ ИИ → колбэк
-    на return_url) добавим, когда увидим настоящий запрос."""
+    """Приёмник widget_request от Salesbot. Отвечаем 200 сразу (лимит 2 сек), а
+    генерацию+колбэк делаем фоново. Печатаем сырой payload — на первом тесте снимем
+    точный формат (имена полей сообщения/сделки, return_url, авторизацию continue)."""
     raw = await request.text()
-    log.info("SALESBOT_HANDLER headers=%s", dict(request.headers))
     log.info("SALESBOT_HANDLER body=%s", raw[:3000])
+    try:
+        d = json.loads(raw) if raw else {}
+    except Exception:  # noqa: BLE001
+        d = {}
+    return_url = d.get("return_url") or ""
+    payload = d.get("data") or {}
+    message = str(payload.get("msg") or payload.get("message")
+                  or payload.get("text") or "").strip()
+    session = str(payload.get("lead") or payload.get("entity_id")
+                  or payload.get("session_id") or "sb").strip()
+    if return_url and message:
+        asyncio.create_task(_salesbot_process(return_url, session, message))
     return web.json_response({"ok": True})
 
 
