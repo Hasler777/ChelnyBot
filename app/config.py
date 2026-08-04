@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     widget_public_url: str = "https://144-31-108-55.sslip.io"
     widget_token: str = ""  # общий секрет, который виджет шлёт в запросах
 
+    # Salesbot amoCRM: код-шаг дёргает наш эндпоинт /salesbot/reply за ответом ИИ.
+    # salesbot_token — общий секрет (передаётся в ?token= или заголовке) от подделки.
+    salesbot_token: str = ""
+
     # Веб-виджет Сони на сайте (чат-пузырь). Публичный адрес самого сервера бота —
     # там же живут /web/* эндпоинты (берём тот же, что и widget_public_url).
     web_enabled: bool = True

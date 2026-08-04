@@ -277,6 +277,48 @@ async def web_upload(request: web.Request) -> web.Response:
         headers=headers)
 
 
+async def salesbot_reply(request: web.Request) -> web.Response:
+    """Ответ ИИ для Salesbot amoCRM (код-шаг дёргает этот URL).
+
+    Вход JSON: {session_id|lead_id|chat_id, message|text}. session_id — стабильный
+    ключ беседы (напр. id сделки), по нему держим историю. Выход: {reply, handoff}.
+    handoff=true — ИИ решил передать флористу: сделку в amoCRM НЕ создаём (она уже
+    есть), только сигналим боту сменить этап."""
+    token = request.query.get("token") or request.headers.get("X-Token")
+    if settings.salesbot_token and token != settings.salesbot_token:
+        return web.json_response({"error": "forbidden"}, status=403)
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001
+        data = {}
+    session_id = str(data.get("session_id") or data.get("lead_id")
+                     or data.get("chat_id") or "").strip()
+    message = (data.get("message") or data.get("text") or "").strip()
+    if not session_id or not message:
+        return web.json_response({"error": "bad request"}, status=400)
+    if len(message) > 2000:
+        message = message[:2000]
+
+    uid, is_new = await storage.web_session_uid(f"sb-{session_id}")
+    if is_new:
+        await storage.mark_session_start(uid)
+
+    async with _lock_for(uid):
+        try:
+            result = await consultant.generate(uid, message)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("salesbot: ошибка генерации: %s", exc)
+            return web.json_response({"reply": FALLBACK_ERROR, "handoff": False})
+        await storage.add_message(uid, "user", message)
+        if result.handoff is not None:
+            note = "Передаю флористу — он подключится 🌸"
+            await storage.add_message(uid, "assistant", note)
+            return web.json_response({"reply": note, "handoff": True})
+        reply = result.text or FALLBACK_ERROR
+        await storage.add_message(uid, "assistant", reply)
+        return web.json_response({"reply": reply, "handoff": False})
+
+
 async def web_stream(request: web.Request) -> web.StreamResponse:
     """SSE: держим соединение и шлём в браузер ответы флориста (режим handoff)."""
     uuid = (request.query.get("uuid") or "").strip()
@@ -365,6 +407,7 @@ def add_web_routes(app: web.Application) -> None:
     app.router.add_post("/web/start", web_start)
     app.router.add_post("/web/message", web_message)
     app.router.add_post("/web/upload", web_upload)
+    app.router.add_post("/salesbot/reply", salesbot_reply)
     app.router.add_get("/web/stream", web_stream)
     app.router.add_get("/web/widget.js", web_widget_js)
     app.router.add_get("/web/demo", web_demo)
