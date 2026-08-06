@@ -664,8 +664,10 @@ function renderWallet(w){
 
 function renderStats(t){
   if(!t) return;
+  const atFlorist = (data||[]).filter(u => u.state === 'handoff').length;
   document.getElementById('stats').innerHTML = [
     ['Пользователей', t.users],
+    ['У флориста', atFlorist],
     ['Сообщений', t.messages],
     ...(SHOW_TOKENS ? [['LLM-запросов', t.calls], ['Токенов', (t.tokens||0).toLocaleString('ru-RU')]] : []),
     ['Затраты всего', money(t.cost)],
