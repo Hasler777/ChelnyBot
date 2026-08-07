@@ -1,0 +1,11 @@
+{
+  "widget": {
+    "name": "Sonya AI",
+    "short_description": "Sonya AI assistant for Salesbot",
+    "description": "Connects the Sonya AI assistant (CvetoMir) to Salesbot: replies to clients on any channel at the chosen pipeline stage, helps pick a bouquet and hands the chat over to a florist."
+  },
+  "salesbot": {
+    "sonya_reply": "Sonya — AI reply",
+    "url": "AI handler URL"
+  }
+}

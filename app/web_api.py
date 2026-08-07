@@ -18,6 +18,9 @@ uid (см. storage.web_session_uid), который дальше использ�
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import time
@@ -362,22 +365,45 @@ async def _salesbot_process(return_url: str, session: str, message: str) -> None
         log.exception("SALESBOT_HANDLER process error: %s", exc)
 
 
+def _verify_amo_jwt(token: str, secret: str) -> dict | None:
+    """Проверить HS256-JWT от Salesbot секретом интеграции. Возвращает payload
+    (account_id, entity_id — id сделки, entity_type, client_uid) или None."""
+    try:
+        head_b64, payload_b64, sig_b64 = token.split(".")
+        signing = f"{head_b64}.{payload_b64}".encode("utf-8")
+        expected = hmac.new(secret.encode("utf-8"), signing, hashlib.sha256).digest()
+        got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
+        if not hmac.compare_digest(expected, got):
+            return None
+        return json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def salesbot_handler(request: web.Request) -> web.Response:
-    """Приёмник widget_request от Salesbot. Отвечаем 200 сразу (лимит 2 сек), а
-    генерацию+колбэк делаем фоново. Печатаем сырой payload — на первом тесте снимем
-    точный формат (имена полей сообщения/сделки, return_url, авторизацию continue)."""
+    """Приёмник widget_request от Salesbot (виджет Sonya AI). Отвечаем 200 сразу
+    (лимит 2 сек), генерацию+колбэк делаем фоново. Подпись входящего JWT проверяем
+    секретом интеграции; id сделки берём из токена (entity_id) — надёжнее плейсхолдера."""
     raw = await request.text()
-    log.info("SALESBOT_HANDLER body=%s", raw[:3000])
+    log.info("SALESBOT_HANDLER body=%s", raw[:2000])
     try:
         d = json.loads(raw) if raw else {}
     except Exception:  # noqa: BLE001
         d = {}
     return_url = d.get("return_url") or ""
     payload = d.get("data") or {}
-    message = str(payload.get("msg") or payload.get("message")
+
+    claims = None
+    if settings.amo_widget_secret and d.get("token"):
+        claims = _verify_amo_jwt(d["token"], settings.amo_widget_secret)
+        if not claims:
+            log.warning("SALESBOT_HANDLER: невалидная подпись JWT — игнорирую запрос")
+            return web.json_response({"ok": True})
+
+    session = str((claims or {}).get("entity_id") or payload.get("lead")
+                  or payload.get("entity_id") or payload.get("session_id") or "sb").strip()
+    message = str(payload.get("message") or payload.get("msg")
                   or payload.get("text") or "").strip()
-    session = str(payload.get("lead") or payload.get("entity_id")
-                  or payload.get("session_id") or "sb").strip()
     if return_url and message:
         asyncio.create_task(_salesbot_process(return_url, session, message))
     return web.json_response({"ok": True})

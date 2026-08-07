@@ -1,0 +1,27 @@
+{
+  "widget": {
+    "name": "widget.name",
+    "description": "widget.description",
+    "short_description": "widget.short_description",
+    "version": "1.0.0",
+    "interface_version": 2,
+    "init_once": true,
+    "locale": ["ru", "en"],
+    "installation": true
+  },
+  "locations": ["salesbot_designer", "settings"],
+  "salesbot_designer": {
+    "logo": "/widgets/sonyaai/images/logo.png",
+    "sonya_reply": {
+      "name": "salesbot.sonya_reply",
+      "settings": {
+        "url": {
+          "name": "salesbot.url",
+          "default_value": "https://144-31-108-55.sslip.io/salesbot/handler",
+          "type": "text",
+          "manual": true
+        }
+      }
+    }
+  }
+}

@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # Salesbot amoCRM: код-шаг дёргает наш эндпоинт /salesbot/reply за ответом ИИ.
     # salesbot_token — общий секрет (передаётся в ?token= или заголовке) от подделки.
     salesbot_token: str = ""
+    # Виджет amoCRM (Salesbot widget_request): secret_key интеграции. Им подписан
+    # JWT входящих запросов от Salesbot — валидируем подпись и берём id сделки (entity_id).
+    amo_widget_secret: str = ""
 
     # Веб-виджет Сони на сайте (чат-пузырь). Публичный адрес самого сервера бота —
     # там же живут /web/* эндпоинты (берём тот же, что и widget_public_url).
