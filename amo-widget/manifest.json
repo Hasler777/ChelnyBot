@@ -3,13 +3,20 @@
     "name": "widget.name",
     "description": "widget.description",
     "short_description": "widget.short_description",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "interface_version": 2,
     "init_once": true,
     "locale": ["ru", "en"],
     "installation": true
   },
   "locations": ["salesbot_designer", "settings"],
+  "settings": {
+    "url": {
+      "name": "settings.url",
+      "type": "text",
+      "required": false
+    }
+  },
   "salesbot_designer": {
     "logo": "/widgets/sonyaai/images/logo.png",
     "sonya_reply": {
