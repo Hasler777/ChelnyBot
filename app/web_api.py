@@ -328,12 +328,10 @@ async def _salesbot_continue(return_url: str, reply: str) -> None:
     """Продолжить Salesbot: отправить текст клиенту и завершить шаг (colбэк на
     return_url). Пробуем с OAuth-токеном интеграции; логируем ответ, чтобы на
     первом же тесте увидеть, работает ли формат/авторизация."""
-    body = {
-        "data": {"status": "ok"},
-        "execute_handlers": [
-            {"handler": "show", "params": {"type": "text", "value": reply}},
-        ],
-    }
+    # Ответ Сони кладём в data.message — в следующем шаге бота он доступен как
+    # {{json.message}} (шаг «Отправить сообщение»). Хендлер show НЕ используем:
+    # его value ограничен 80 символами, а ответы ИИ длиннее.
+    body = {"data": {"message": reply, "status": "ok"}}
     headers = {"Content-Type": "application/json"}
     # токен интеграции-виджета (получен при установке через /amo/oauth), иначе — старый
     token = await storage.state_get("amo_widget_access_token") or settings.amo_access_token
