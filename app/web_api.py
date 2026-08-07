@@ -334,8 +334,10 @@ async def _salesbot_continue(return_url: str, reply: str) -> None:
         ],
     }
     headers = {"Content-Type": "application/json"}
-    if settings.amo_access_token:
-        headers["Authorization"] = f"Bearer {settings.amo_access_token}"
+    # токен интеграции-виджета (получен при установке через /amo/oauth), иначе — старый
+    token = await storage.state_get("amo_widget_access_token") or settings.amo_access_token
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(return_url, json=body, headers=headers,
@@ -407,6 +409,41 @@ async def salesbot_handler(request: web.Request) -> web.Response:
     if return_url and message:
         asyncio.create_task(_salesbot_process(return_url, session, message))
     return web.json_response({"ok": True})
+
+
+async def amo_oauth(request: web.Request) -> web.Response:
+    """Редирект после установки виджета amoCRM. Обмениваем code на access_token
+    (нужен для колбэка continue в Salesbot) и сохраняем его. Возвращаем 200, иначе
+    установка на стороне amoCRM висит в ожидании этого адреса."""
+    params = dict(request.query)
+    log.info("AMO_OAUTH params=%s", {k: params[k] for k in params if k != "code"})
+    code = params.get("code")
+    referer = params.get("referer") or params.get("account") or ""
+    if code and referer and settings.amo_widget_client_id and settings.amo_widget_secret:
+        base = referer if referer.startswith("http") else f"https://{referer}"
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"{base}/oauth2/access_token", json={
+                    "client_id": settings.amo_widget_client_id,
+                    "client_secret": settings.amo_widget_secret,
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": f"{settings.widget_public_url.rstrip('/')}/amo/oauth",
+                }, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                    tok = await r.json(content_type=None)
+            if tok.get("access_token"):
+                await storage.state_set("amo_widget_access_token", tok["access_token"])
+                await storage.state_set("amo_widget_refresh_token", tok.get("refresh_token", ""))
+                await storage.state_set("amo_widget_base", base)
+                log.info("AMO_OAUTH: токен интеграции получен и сохранён (%s)", base)
+            else:
+                log.warning("AMO_OAUTH: обмен кода не дал токен: %s", str(tok)[:300])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("AMO_OAUTH: ошибка обмена кода на токен: %s", exc)
+    return web.Response(
+        text="<!doctype html><meta charset=utf-8><h3 style='font-family:sans-serif'>"
+             "Sonya AI установлена ✅ Можно закрыть это окно.</h3>",
+        content_type="text/html")
 
 
 async def web_stream(request: web.Request) -> web.StreamResponse:
@@ -499,6 +536,8 @@ def add_web_routes(app: web.Application) -> None:
     app.router.add_post("/web/upload", web_upload)
     app.router.add_post("/salesbot/reply", salesbot_reply)
     app.router.add_post("/salesbot/handler", salesbot_handler)
+    app.router.add_get("/amo/oauth", amo_oauth)
+    app.router.add_post("/amo/oauth", amo_oauth)
     app.router.add_get("/web/stream", web_stream)
     app.router.add_get("/web/widget.js", web_widget_js)
     app.router.add_get("/web/demo", web_demo)

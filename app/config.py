@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     # Виджет amoCRM (Salesbot widget_request): secret_key интеграции. Им подписан
     # JWT входящих запросов от Salesbot — валидируем подпись и берём id сделки (entity_id).
     amo_widget_secret: str = ""
+    # client_id (ID интеграции) виджета — для OAuth-обмена кода на токен при установке
+    # (эндпоинт /amo/oauth). Токен нужен для колбэка continue в Salesbot.
+    amo_widget_client_id: str = ""
 
     # Веб-виджет Сони на сайте (чат-пузырь). Публичный адрес самого сервера бота —
     # там же живут /web/* эндпоинты (берём тот же, что и widget_public_url).
