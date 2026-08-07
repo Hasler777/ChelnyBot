@@ -349,12 +349,22 @@ async def _salesbot_continue(return_url: str, reply: str) -> None:
         log.warning("SALESBOT_HANDLER continue error: %s", exc)
 
 
+SALESBOT_GREETING = (
+    "Здравствуйте! 🌸 Меня зовут Соня, я помогу подобрать букет. "
+    "Расскажите, для кого и по какому поводу — или какой бюджет?"
+)
+
+
 async def _salesbot_process(return_url: str, session: str, message: str) -> None:
-    """Фоново: ответ ИИ по сообщению клиента + колбэк в Salesbot."""
+    """Фоново: ответ ИИ по сообщению клиента + колбэк в Salesbot. Если сообщения нет
+    (заход сделки на этап без текста) — шлём детерминированное приветствие."""
     try:
         uid, is_new = await storage.web_session_uid(f"sb-{session}")
         if is_new:
             await storage.mark_session_start(uid)
+        if not message.strip():
+            await _salesbot_continue(return_url, SALESBOT_GREETING)
+            return
         async with _lock_for(uid):
             result = await consultant.generate(uid, message)
             await storage.add_message(uid, "user", message)
@@ -427,7 +437,7 @@ async def salesbot_handler(request: web.Request) -> web.Response:
                   or payload.get("entity_id") or payload.get("session_id") or "sb").strip()
     message = str(payload.get("message") or payload.get("msg")
                   or payload.get("text") or "").strip()
-    if return_url and message:
+    if return_url:
         asyncio.create_task(_salesbot_process(return_url, session, message))
     return web.json_response({"ok": True})
 
