@@ -7,6 +7,12 @@ define(['jquery'], function ($) {
       bind_actions: function () { return true; },
       render: function () { return true; },
       settings: function () { return true; },
+      // Вызывается при сохранении настроек/установке. Без него установка виджета
+      // висит в спиннере (amoCRM ждёт ответа этого колбэка).
+      onSave: function () { return true; },
+      onAddAsSource: function () { return true; },
+      contacts: { selected: function () {} },
+      leads: { selected: function () {} },
 
       // Вызывается при сохранении шага виджета в конструкторе Salesbot.
       // Возвращаем один шаг с встроенным обработчиком widget_request: он POST-ит

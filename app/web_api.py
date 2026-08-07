@@ -24,6 +24,7 @@ import hmac
 import json
 import logging
 import time
+from urllib.parse import parse_qs
 
 import aiohttp
 from aiohttp import web
@@ -368,12 +369,18 @@ async def _salesbot_process(return_url: str, session: str, message: str) -> None
 
 
 def _verify_amo_jwt(token: str, secret: str) -> dict | None:
-    """Проверить HS256-JWT от Salesbot секретом интеграции. Возвращает payload
-    (account_id, entity_id — id сделки, entity_type, client_uid) или None."""
+    """Проверить HS-JWT от Salesbot секретом интеграции. amoCRM подписывает токен
+    HS512 (алгоритм берём из заголовка, поддерживаем HS256/384/512). Возвращает
+    payload (account_id, entity_id — id сделки, entity_type, client_uuid) или None."""
+    _algs = {"HS256": hashlib.sha256, "HS384": hashlib.sha384, "HS512": hashlib.sha512}
     try:
         head_b64, payload_b64, sig_b64 = token.split(".")
+        header = json.loads(base64.urlsafe_b64decode(head_b64 + "=" * (-len(head_b64) % 4)))
+        hashfn = _algs.get(str(header.get("alg", "HS256")).upper())
+        if hashfn is None:
+            return None
         signing = f"{head_b64}.{payload_b64}".encode("utf-8")
-        expected = hmac.new(secret.encode("utf-8"), signing, hashlib.sha256).digest()
+        expected = hmac.new(secret.encode("utf-8"), signing, hashfn).digest()
         got = base64.urlsafe_b64decode(sig_b64 + "=" * (-len(sig_b64) % 4))
         if not hmac.compare_digest(expected, got):
             return None
@@ -388,12 +395,26 @@ async def salesbot_handler(request: web.Request) -> web.Response:
     секретом интеграции; id сделки берём из токена (entity_id) — надёжнее плейсхолдера."""
     raw = await request.text()
     log.info("SALESBOT_HANDLER body=%s", raw[:2000])
-    try:
-        d = json.loads(raw) if raw else {}
-    except Exception:  # noqa: BLE001
-        d = {}
+    # amoCRM Salesbot шлёт widget_request как application/x-www-form-urlencoded
+    # (token=...&data[message]=...&data[lead]=...&return_url=...), НЕ JSON.
+    # Поддерживаем оба формата: сначала JSON (если тело начинается с '{'), иначе form.
+    d: dict = {}
+    if raw.strip().startswith("{"):
+        try:
+            d = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            d = {}
+        payload = d.get("data") or {}
+    else:
+        q = parse_qs(raw, keep_blank_values=True)
+        first = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+        d = {"token": first("token"), "return_url": first("return_url")}
+        payload = {
+            "message": first("data[message]"),
+            "lead": first("data[lead]"),
+            "name": first("data[name]"),
+        }
     return_url = d.get("return_url") or ""
-    payload = d.get("data") or {}
 
     claims = None
     if settings.amo_widget_secret and d.get("token"):
