@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # long polling GET /updates, исходящие POST /messages?user_id=.
     max_bot_token: str = ""
     max_api_url: str = "https://botapi.max.ru"
+    # Имя MAX-бота в ссылке (часть после max.ru/), напр. id026408868630_bot —
+    # база для UTM-deeplink `max.ru/<username>?start=…` в админке. Публичное
+    # (не секрет). Пусто -> MAX-ссылки в разделе «Реклама (UTM)» не строятся.
+    max_bot_username: str = "id026408868630_bot"
 
     # OpenRouter / LLM
     openrouter_api_key: str

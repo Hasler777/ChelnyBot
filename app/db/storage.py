@@ -104,10 +104,12 @@ CREATE TABLE IF NOT EXISTS app_state (
     value TEXT
 );
 CREATE TABLE IF NOT EXISTS utm_campaigns (
-    payload TEXT PRIMARY KEY,   -- нормализованный (lower) ?start=… ; совпадает с users.utm_source
-    label TEXT NOT NULL,        -- человекочитаемое имя кампании (задаёт владелец в админке)
+    payload TEXT NOT NULL,       -- нормализованный (lower) ?start=… ; совпадает с users.utm_source
+    channel TEXT NOT NULL DEFAULT 'tg',  -- канал метки: 'tg' (Telegram/веб) или 'max' (MAX-бот)
+    label TEXT NOT NULL,         -- человекочитаемое имя кампании (задаёт владелец в админке)
     created_at REAL,
-    updated_at REAL
+    updated_at REAL,
+    PRIMARY KEY (payload, channel)  -- один код метки живёт отдельно в каждом канале
 );
 CREATE INDEX IF NOT EXISTS idx_messages_tg ON messages(tg_id, id);
 CREATE INDEX IF NOT EXISTS idx_users_conv ON users(amojo_conversation_id);
@@ -143,6 +145,58 @@ class Storage:
                 await self._db.execute(ddl)
             except Exception:  # noqa: BLE001 — колонка уже есть
                 pass
+        # utm_campaigns: одиночный ключ payload -> составной (payload, channel).
+        # SQLite не умеет ALTER PRIMARY KEY, поэтому пересобираем таблицу.
+        cur = await self._db.execute("PRAGMA table_info(utm_campaigns)")
+        cols = [r["name"] for r in await cur.fetchall()]
+        if cols and "channel" not in cols:
+            await self._db.executescript(
+                """
+                CREATE TABLE utm_campaigns_new (
+                    payload TEXT NOT NULL,
+                    channel TEXT NOT NULL DEFAULT 'tg',
+                    label TEXT NOT NULL,
+                    created_at REAL,
+                    updated_at REAL,
+                    PRIMARY KEY (payload, channel)
+                );
+                INSERT INTO utm_campaigns_new (payload, channel, label, created_at, updated_at)
+                    SELECT payload, 'tg', label, created_at, updated_at FROM utm_campaigns;
+                DROP TABLE utm_campaigns;
+                ALTER TABLE utm_campaigns_new RENAME TO utm_campaigns;
+                """
+            )
+        await self._db.commit()
+        await self._seed_max_utm_campaigns()
+
+    # Готовые MAX-метки из базы знаний (лист UTM MAX-бота). Сеются один раз;
+    # после этого владелец волен их переименовать/удалить в админке.
+    _MAX_UTM_SEED = (
+        ("2gis_igruska", "MAX_bot_2ГИС рубрика игрушка"),
+        ("2gis_towari", "MAX_bot_2ГИС рубрика товары"),
+        ("2gis_suveniri", "MAX_bot_2ГИС рубрика сувениры"),
+        ("vk_senler", "MAX_bot_ВК senler"),
+    )
+
+    async def _seed_max_utm_campaigns(self) -> None:
+        """Однократно завести стартовые MAX-метки (guard во app_state, чтобы не
+        воскрешать удалённые владельцем строки при каждом рестарте)."""
+        cur = await self._db.execute(
+            "SELECT value FROM app_state WHERE key = 'utm_max_seed_v1'"
+        )
+        if await cur.fetchone():
+            return
+        now = time.time()
+        for payload, label in self._MAX_UTM_SEED:
+            await self._db.execute(
+                "INSERT OR IGNORE INTO utm_campaigns "
+                "(payload, channel, label, created_at, updated_at) "
+                "VALUES (?, 'max', ?, ?, ?)",
+                (payload, label, now, now),
+            )
+        await self._db.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES ('utm_max_seed_v1', '1')"
+        )
         await self._db.commit()
 
     async def close(self) -> None:
@@ -492,26 +546,32 @@ class Storage:
         await self.db.commit()
 
     # ---------- UTM-кампании (метки, заведённые владельцем в админке) ----------
-    async def utm_campaign_upsert(self, payload: str, label: str) -> None:
-        """Завести/переименовать кампанию. payload — уже нормализованный (lower),
-        совпадает с users.utm_source. created_at ставится только при вставке."""
+    async def utm_campaign_upsert(self, payload: str, label: str, channel: str = "tg") -> None:
+        """Завести/переименовать кампанию в канале. payload — уже нормализованный
+        (lower), совпадает с users.utm_source. created_at ставится только при
+        вставке. Один payload живёт отдельно в каждом канале ('tg'/'max')."""
         now = time.time()
         await self.db.execute(
-            "INSERT INTO utm_campaigns (payload, label, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(payload) DO UPDATE SET label = excluded.label, "
+            "INSERT INTO utm_campaigns (payload, channel, label, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(payload, channel) DO UPDATE SET label = excluded.label, "
             "updated_at = excluded.updated_at",
-            (payload, label, now, now),
+            (payload, channel, label, now, now),
         )
         await self.db.commit()
 
     async def utm_campaigns_with_counts(self) -> list[dict]:
-        """Список кампаний с числом привлечённых клиентов. Метки с 0 клиентов
-        тоже показываем (коррелирующий подзапрос, не INNER JOIN)."""
+        """Список кампаний (с каналом) и числом привлечённых клиентов ИМЕННО
+        этого канала: MAX-метка считает только клиентов MAX, TG-метка —
+        Telegram и веб. Метки с 0 клиентов тоже показываем."""
         cur = await self.db.execute(
             """
-            SELECT c.payload, c.label, c.created_at,
-                   (SELECT COUNT(*) FROM users u WHERE u.utm_source = c.payload) AS count
+            SELECT c.payload, c.channel, c.label, c.created_at,
+                   (SELECT COUNT(*) FROM users u
+                     WHERE u.utm_source = c.payload
+                       AND ( (c.channel = 'max' AND u.channel = 'max')
+                          OR (c.channel <> 'max' AND COALESCE(u.channel,'tg') <> 'max') )
+                   ) AS count
             FROM utm_campaigns c
             ORDER BY count DESC, c.label COLLATE NOCASE
             """
@@ -519,11 +579,17 @@ class Storage:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def utm_labels_map(self) -> dict[str, str]:
-        """{payload: label} — для подмешивания имён кампаний в utm.admin_label."""
-        cur = await self.db.execute("SELECT payload, label FROM utm_campaigns")
+    async def utm_labels_map(self) -> dict[str, dict[str, str]]:
+        """{payload: {'tg'|'max': label}} — имена кампаний по каналам для
+        подмешивания в utm.admin_label (у одного payload бывают разные подписи
+        в TG и MAX)."""
+        cur = await self.db.execute("SELECT payload, channel, label FROM utm_campaigns")
         rows = await cur.fetchall()
-        return {r["payload"]: r["label"] for r in rows}
+        out: dict[str, dict[str, str]] = {}
+        for r in rows:
+            bucket = "max" if r["channel"] == "max" else "tg"
+            out.setdefault(r["payload"], {})[bucket] = r["label"]
+        return out
 
     async def dialog_cost(self, tg_id: int) -> dict:
         """Стоимость и расход токенов одного диалога."""

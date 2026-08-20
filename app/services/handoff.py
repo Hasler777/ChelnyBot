@@ -36,8 +36,11 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     # один Telegram-пользователь = один контакт в amoCRM
     user = await storage.get_user(tg_id)
     existing_contact_id = user.amo_contact_id if user else None
-    # метка канала (UTM из deeplink /start) для аналитики
-    source_label = utm.resolve_source(user.utm_source if user else "")
+    # метка канала (UTM из deeplink /start) для аналитики — с учётом канала
+    # клиента: MAX-бот даёт префикс MAX_bot_, Telegram/веб — TG_bot_.
+    source_label = utm.resolve_source(
+        user.utm_source if user else "", user.channel if user else "tg"
+    )
 
     lead_id: int | None = None
     contact_id: int | None = existing_contact_id

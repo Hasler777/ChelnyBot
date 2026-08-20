@@ -33,6 +33,7 @@ from app.db.storage import (
     max_user_id_from_uid,
     storage,
 )
+from app.crm import utm
 from app.llm import consultant
 from app.services import handoff, media
 
@@ -103,10 +104,21 @@ class MaxBot:
         await self.send_message(uid, "\n".join(parts))
 
     # ---------- обработка входящих ----------
-    async def _greet(self, uid: int) -> None:
-        """Новый диалог (bot_started или /start): метка сессии + приветствие.
-        Аналог on_start в Telegram и первого /web/start у веб-виджета."""
+    async def _greet(self, uid: int, payload: str | None = None) -> None:
+        """Новый диалог (bot_started или /start): метка канала из deeplink,
+        метка сессии + приветствие. Аналог on_start в Telegram.
+
+        payload — код из ссылки max.ru/<bot>?start=<payload> (UTM). Пишем
+        источник только при непустом payload, чтобы повторный заход без метки
+        не затирал реальную кампанию."""
         await storage.get_or_create_user(uid, channel="max")
+        p = utm.normalize(payload) if payload else ""
+        if p:
+            await storage.update_user(uid, utm_source=p)
+        else:
+            user = await storage.get_user(uid)
+            if not (user and user.utm_source):
+                await storage.update_user(uid, utm_source="")  # прямой вход
         await storage.update_user(uid, state=STATE_CONSULT)
         await storage.mark_session_start(uid)
         await storage.add_message(uid, "assistant", GREETING)
@@ -157,7 +169,8 @@ class MaxBot:
             u = upd.get("user") or {}
             uid = self._uid_from(u.get("user_id") or upd.get("user_id"))
             if uid is not None:
-                await self._greet(uid)
+                # payload из deeplink ?start=… (UTM-метка канала)
+                await self._greet(uid, upd.get("payload"))
             return
 
         if kind != "message_created":
@@ -174,8 +187,10 @@ class MaxBot:
         body = msg.get("body") or {}
         text = (body.get("text") or "").strip()
 
-        if text == "/start":
-            await self._greet(uid)
+        if text == "/start" or text.startswith("/start "):
+            # /start <payload> — deeplink-метка приходит и текстом
+            payload = text[len("/start "):].strip() if " " in text else None
+            await self._greet(uid, payload)
             return
 
         attachments = body.get("attachments") or []

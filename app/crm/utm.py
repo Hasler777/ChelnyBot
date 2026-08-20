@@ -42,50 +42,73 @@ SOURCE_LABELS: dict[str, str] = {
 DEFAULT_SOURCE = "TG_bot_Прямой вход/2 гис"
 
 
+def channel_bucket(channel: str | None) -> str:
+    """Канал клиента -> «корзина» UTM: 'max' у MAX-бота, 'tg' у всех остальных
+    (Telegram и веб-виджет пользуются тем же ботом/справочником)."""
+    return "max" if (channel or "").lower() == "max" else "tg"
+
+
+def _prefix(channel: str | None) -> str:
+    """Префикс метки amoCRM по каналу: MAX-бот -> MAX_bot_, иначе -> TG_bot_."""
+    return "MAX_bot_" if channel_bucket(channel) == "max" else "TG_bot_"
+
+
 def normalize(payload: str | None) -> str:
     """Очистить payload из ссылки (регистр, пробелы, служебные префиксы Telegram)."""
     p = (payload or "").strip().lower()
-    # Telegram допускает только [A-Za-z0-9_-]; на всякий случай отрезаем мусор
+    # Telegram/MAX допускают только [A-Za-z0-9_-]; на всякий случай отрезаем мусор
     return p
 
 
-def resolve_source(payload: str | None) -> str:
-    """utm-payload -> метка для amoCRM.
+def resolve_source(payload: str | None, channel: str = "tg") -> str:
+    """utm-payload -> метка для amoCRM с учётом канала.
 
-    Пусто -> прямой вход (DEFAULT_SOURCE). Известный payload -> метка из таблицы.
-    Неизвестный (новая кампания, метку ещё не завели) -> `TG_bot_<payload>`,
-    чтобы обращение всё равно попало в аналитику, а не потерялось.
+    Один и тот же код метки (напр. vk_senler) у Telegram и у MAX даёт разные
+    метки: `TG_bot_ВК senler` и `MAX_bot_ВК senler`. Справочник SOURCE_LABELS
+    хранит TG-вариант; для MAX подменяем префикс.
+
+    Пусто -> прямой вход. Известный payload -> метка из таблицы. Неизвестный
+    (новая кампания) -> `<prefix><payload>`, чтобы обращение не потерялось.
     """
+    prefix = _prefix(channel)
     p = normalize(payload)
     if not p:
-        return DEFAULT_SOURCE
+        return DEFAULT_SOURCE.replace("TG_bot_", prefix)
     label = SOURCE_LABELS.get(p)
     if label:
-        return label
-    return f"TG_bot_{payload.strip()}"
+        return label.replace("TG_bot_", prefix)
+    return f"{prefix}{payload.strip()}"
 
 
-def admin_label(payload: str | None, custom: dict[str, str] | None = None) -> str | None:
-    """Человекочитаемая подпись UTM-источника для админки.
+def admin_label(
+    payload: str | None,
+    channel: str | None = "tg",
+    custom: dict[str, dict[str, str]] | None = None,
+) -> str | None:
+    """Человекочитаемая подпись UTM-источника для админки (без служебного префикса).
 
-    В отличие от resolve_source (метка для amoCRM с префиксом TG_bot_), здесь
-    короткая подпись «для глаз»:
-      None            -> None  (клиент не из TG-deeplink: веб/MAX или заведён
-                                 до появления UTM-меток — «не размечен»);
+      None            -> None  (клиент не размечен — заведён до появления меток);
       пустой payload  -> «Прямой вход» (клиент нажал /start без метки);
-      custom[payload] -> имя кампании, заведённой владельцем в админке (важнее
-                         справочника — владелец мог переименовать источник);
-      известная метка -> из справочника без служебного префикса («ВК senler»);
-      новая кампания  -> сам payload (метку ни в админке, ни в справочнике не завели).
+      custom[payload][bucket] -> имя кампании из админки для нужного канала
+                         (важнее справочника — владелец мог переименовать источник);
+      известная метка -> из справочника без префикса («ВК senler»);
+      новая кампания  -> сам payload.
+
+    `custom` — вложенный словарь {payload: {'tg'|'max': label}} из
+    storage.utm_labels_map(); канал выбирает нужную подпись.
     """
     if payload is None:
         return None
     p = normalize(payload)
     if not p:
         return "Прямой вход"
+    bucket = channel_bucket(channel)
     if custom and p in custom:
-        return custom[p]
+        by_ch = custom[p]
+        lab = by_ch.get(bucket) or next(iter(by_ch.values()), None)
+        if lab:
+            return lab
     label = SOURCE_LABELS.get(p)
     if label:
-        return label.replace("TG_bot_", "")
+        return label.replace("TG_bot_", "").replace("MAX_bot_", "")
     return p

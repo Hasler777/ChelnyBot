@@ -119,7 +119,7 @@ async def _users_response(
     # имена кампаний, заведённых владельцем в админке, важнее статичного справочника
     labels = await storage.utm_labels_map()
     for u in users:
-        u["utm_label"] = utm.admin_label(u.get("utm_source"), labels)
+        u["utm_label"] = utm.admin_label(u.get("utm_source"), u.get("channel"), labels)
     if hidden:
         # скрываем тестовые аккаунты из кабинета владельца и пересчитываем итоги
         # только по видимым клиентам (в /admin фильтр не применяется)
@@ -194,7 +194,7 @@ async def _dialog_response(request: web.Request, markup: float) -> web.Response:
                 "state": user.state if user else None,
                 "amo_lead_id": user.amo_lead_id if user else None,
                 "channel": user.channel if user else None,
-                "utm_label": utm.admin_label(user.utm_source, labels) if user else None,
+                "utm_label": utm.admin_label(user.utm_source, user.channel, labels) if user else None,
             },
             "usd_rub_rate": await _usd_rub_rate(),
         }
@@ -243,29 +243,43 @@ async def _analysis_response(hidden: set[int] | None) -> web.Response:
 
 # ---- UTM-кампании (раздел «Реклама (UTM)») ----
 async def _utm_list_response() -> web.Response:
-    """Список кампаний с числом клиентов + база для готовой deeplink-ссылки."""
+    """Список кампаний (с каналом) + базы deeplink-ссылок для Telegram и MAX."""
     username = await _bot_username()
-    link_base = f"https://t.me/{username}?start=" if username else ""
+    tg_base = f"https://t.me/{username}?start=" if username else ""
+    max_user = settings.max_bot_username.strip()
+    max_base = f"https://max.ru/{max_user}?start=" if max_user else ""
     campaigns = await storage.utm_campaigns_with_counts()
     return web.json_response(
-        {"campaigns": campaigns, "bot_username": username, "link_base": link_base}
+        {
+            "campaigns": campaigns,
+            "bot_username": username,
+            "tg_link_base": tg_base,
+            "max_link_base": max_base,
+            "link_base": tg_base,  # обратная совместимость
+        }
     )
 
 
 async def _utm_create(request: web.Request) -> web.Response:
-    """Создать/переименовать UTM-метку. payload — код кампании (?start=…),
-    label — человекочитаемое имя. Payload нормализуем в lower, чтобы он сходился
-    с users.utm_source (там метки кладутся через utm.normalize)."""
+    """Создать/переименовать UTM-метку в канале. payload — код кампании (?start=…),
+    label — человекочитаемое имя, channel — 'tg'|'max'. Payload нормализуем в
+    lower, чтобы он сходился с users.utm_source (там метки кладутся через
+    utm.normalize)."""
     payload = (request.query.get("payload") or "").strip()
     label = (request.query.get("label") or "").strip()
+    channel = (request.query.get("channel") or "tg").strip().lower()
+    if channel not in ("tg", "max"):
+        return web.json_response({"error": "bad channel"}, status=400)
     if not _UTM_PAYLOAD_RE.match(payload):
         return web.json_response({"error": "bad payload"}, status=400)
     if not label:
         return web.json_response({"error": "empty label"}, status=400)
     label = label[:120]
     payload_norm = utm.normalize(payload)
-    await storage.utm_campaign_upsert(payload_norm, label)
-    return web.json_response({"ok": True, "payload": payload_norm, "label": label})
+    await storage.utm_campaign_upsert(payload_norm, label, channel)
+    return web.json_response(
+        {"ok": True, "payload": payload_norm, "label": label, "channel": channel}
+    )
 
 
 async def api_analysis(request: web.Request) -> web.Response:
@@ -452,7 +466,10 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .utm-form { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:22px; }
   .utm-form .fld { display:flex; flex-direction:column; gap:5px; }
   .utm-form label { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
-  .utm-form input { background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--txt); padding:8px 12px; font-size:13px; min-width:180px; }
+  .utm-form input, .utm-form select { background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--txt); padding:8px 12px; font-size:13px; min-width:180px; }
+  .utm-form select { min-width:130px; cursor:pointer; }
+  .badge.ch-tg { background:#22405e; color:#9fccff; }
+  .badge.ch-max { background:#4a2f5e; color:#d6b0ff; }
   .utm-form button { background:var(--acc); border:0; color:#fff; border-radius:8px; padding:9px 18px; font-size:13px; font-weight:600; cursor:pointer; }
   .utm-form button:hover { filter:brightness(1.1); }
   #utmerr { color:#f08a8a; font-size:12px; min-height:16px; margin:-12px 0 12px 2px; }
@@ -513,6 +530,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
       <h2 class="ptitle">Реклама (UTM)</h2>
       <div class="psub">Создайте метку для рекламы — получите ссылку для канала и статистику привлечённых клиентов. Клиент перейдёт по ссылке, нажмёт «Старт» — и обращение зачтётся этой метке.</div>
       <form class="utm-form" id="utmform" onsubmit="return false">
+        <div class="fld"><label>Канал</label><select id="utmchannel"><option value="tg">Telegram</option><option value="max">MAX</option></select></div>
         <div class="fld"><label>Код метки (в ссылке)</label><input id="utmpayload" placeholder="напр. vk_avgust" maxlength="64" autocomplete="off"></div>
         <div class="fld"><label>Название кампании</label><input id="utmlabel" placeholder="напр. ВК август" maxlength="120" autocomplete="off"></div>
         <button id="utmadd">Создать метку</button>
@@ -520,9 +538,9 @@ _ADMIN_HTML = """<!DOCTYPE html>
       <div id="utmerr"></div>
       <table>
         <thead><tr>
-          <th>Кампания</th><th>Код</th><th>Ссылка</th><th class="num">Клиентов</th>
+          <th>Канал</th><th>Кампания</th><th>Код</th><th>Ссылка</th><th class="num">Клиентов</th>
         </tr></thead>
-        <tbody id="utmrows"><tr><td colspan="4" class="muted">Загрузка…</td></tr></tbody>
+        <tbody id="utmrows"><tr><td colspan="5" class="muted">Загрузка…</td></tr></tbody>
       </table>
     </section>
   </main>
@@ -763,8 +781,9 @@ document.getElementById('logout').onclick=()=>{
 };
 
 // ---- раздел «Реклама (UTM)» ----
-let utmData = { campaigns:[], link_base:'', bot_username:'' };
+let utmData = { campaigns:[], tg_link_base:'', max_link_base:'', bot_username:'' };
 const UTM_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const CH_LABEL = { tg:'Telegram', max:'MAX' };
 
 async function loadUtm(){
   let r;
@@ -779,14 +798,21 @@ async function loadUtm(){
 function renderUtm(){
   const tb = document.getElementById('utmrows');
   const cs = utmData.campaigns || [];
-  if(!cs.length){ tb.innerHTML='<tr><td colspan="4" class="muted">Пока нет меток — создайте первую выше</td></tr>'; return; }
-  const base = utmData.link_base || '';
+  if(!cs.length){ tb.innerHTML='<tr><td colspan="5" class="muted">Пока нет меток — создайте первую выше</td></tr>'; return; }
+  const tgBase = utmData.tg_link_base || '';
+  const maxBase = utmData.max_link_base || '';
   tb.innerHTML = cs.map(c=>{
+    const ch = c.channel==='max' ? 'max' : 'tg';
+    const base = ch==='max' ? maxBase : tgBase;
     const link = base ? base + encodeURIComponent(c.payload) : '';
+    const hint = ch==='max'
+      ? 'ссылка недоступна — задайте MAX_BOT_USERNAME'
+      : 'ссылка недоступна — задайте TELEGRAM_BOT_USERNAME';
     const linkCell = base
       ? `<span class="utm-link"><a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a><button class="copy" data-link="${esc(link)}">Копировать</button></span>`
-      : '<span class="utm-hint">ссылка недоступна — задайте TELEGRAM_BOT_USERNAME</span>';
+      : `<span class="utm-hint">${hint}</span>`;
     return `<tr>
+      <td><span class="badge ch-${ch}">${CH_LABEL[ch]}</span></td>
       <td>${esc(c.label)}</td>
       <td class="muted">${esc(c.payload)}</td>
       <td>${linkCell}</td>
@@ -812,12 +838,13 @@ async function createUtm(){
   const err = document.getElementById('utmerr');
   const payload = (document.getElementById('utmpayload').value||'').trim();
   const label = (document.getElementById('utmlabel').value||'').trim();
+  const channel = document.getElementById('utmchannel').value || 'tg';
   err.textContent='';
   if(!UTM_RE.test(payload)){ err.textContent='Код метки: латинские буквы, цифры, _ и - (до 64 символов)'; return; }
   if(!label){ err.textContent='Укажите название кампании'; return; }
   let r;
   try {
-    r = await fetch(`${API}/api/utm?token=${encodeURIComponent(token)}&payload=${encodeURIComponent(payload)}&label=${encodeURIComponent(label)}`, {method:'POST'});
+    r = await fetch(`${API}/api/utm?token=${encodeURIComponent(token)}&payload=${encodeURIComponent(payload)}&label=${encodeURIComponent(label)}&channel=${encodeURIComponent(channel)}`, {method:'POST'});
   } catch(e){ err.textContent='Ошибка сети'; return; }
   if(r.status===403){ promptToken(); return; }
   if(!r.ok){ err.textContent='Не удалось сохранить метку'; return; }
