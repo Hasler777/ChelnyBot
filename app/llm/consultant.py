@@ -48,6 +48,18 @@ _HANDOFF_OFFER_RE = re.compile(
     re.I,
 )
 
+# Маркеры этапа ОФОРМЛЕНИЯ: последняя реплика ассистента — сводка заказа
+# («Проверим, всё ли правильно … Всё верно?»). На этом этапе НЕ применяем
+# «дискавери»-фолбэки (промис-поиск и подмену каталогом): ответ модели
+# (допродажа/подтверждение) должен пройти КАК ЕСТЬ. Иначе после «да» клиента
+# выбрасывает обратно в каталог вместо перехода к передаче флористу — заказ теряется.
+_CHECKOUT_MARKERS = (
+    "всё верно?",
+    "все верно?",
+    "проверим, всё ли правильно",
+    "проверим, все ли правильно",
+)
+
 
 async def _guard_reply(tg_id: int, text: str, offered: list[Product],
                        exclude_urls: set[str] | None = None) -> str:
@@ -145,6 +157,7 @@ async def _run_search(args: dict, exclude_urls: set[str] | None = None) -> tuple
         limit=3,
         exclude_urls=exclude_urls,
         on_sale=bool(args.get("on_sale")),
+        category=args.get("category"),
     )
     if not products:
         return json.dumps({"products": [], "note": "ничего не найдено в этом бюджете"},
@@ -163,6 +176,12 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
+
+    # этап оформления: последняя реплика ассистента — сводка заказа (см. _CHECKOUT_MARKERS)
+    last_assistant = next(
+        (m.get("content") or "" for m in reversed(history) if m["role"] == "assistant"), ""
+    ).lower()
+    in_checkout = any(mk in last_assistant for mk in _CHECKOUT_MARKERS)
 
     # уже показанные товары — исключим из нового поиска, чтобы «ещё варианты»
     # давали НОВЫЕ букеты, а не те же самые
@@ -199,15 +218,21 @@ async def generate(tg_id: int, user_text: str) -> ConsultResult:
             # «Минутку, сейчас подберу!» без вызова инструмента — модель тянет время
             # и ход заканчивается без товаров. Форсируем реальный поиск и показываем
             # настоящие варианты, чтобы клиент не остался без ответа.
-            if not did_search and not _SHOP_URL_RE.search(text) and _PROMISE_RE.search(text):
+            # На этапе оформления (после сводки) промис-фолбэк НЕ применяем: реплика
+            # модели про допродажу может задеть слова вроде «минут» и ошибочно
+            # выкинуть клиента в каталог вместо продолжения заказа.
+            if (not in_checkout and not did_search
+                    and not _SHOP_URL_RE.search(text) and _PROMISE_RE.search(text)):
                 products = await catalog.search(query=user_text or None, limit=3,
                                                 exclude_urls=shown_urls)
                 if products:
                     log.info("Модель пообещала, но не искала — форсирую поиск для %s", tg_id)
                     return ConsultResult(text=_render_products(products))
             # защита от галлюцинаций: ссылки на несуществующие товары (в т.ч.
-            # повтор фейков из истории) подменяем реальным списком из каталога
-            text = await _guard_reply(tg_id, text, offered, exclude_urls=shown_urls)
+            # повтор фейков из истории) подменяем реальным списком из каталога.
+            # На этапе оформления НЕ подменяем — там показ каталога неуместен.
+            if not in_checkout:
+                text = await _guard_reply(tg_id, text, offered, exclude_urls=shown_urls)
             return ConsultResult(text=text or "Извините, повторите, пожалуйста?")
 
         # есть вызовы инструментов — добавляем сообщение ассистента в контекст

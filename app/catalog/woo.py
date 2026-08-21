@@ -22,6 +22,19 @@ log = logging.getLogger(__name__)
 # их предлагаем отдельно как допродажу, а не как «букет».
 _ACCESSORY_CATEGORIES = {"ДОПОЛНИТЕЛЬНЫЕ ТОВАРЫ", "ШАРЫ", "ИГРУШКИ"}
 
+# Алиасы запрошенной категории -> подстрока имени категории в каталоге WooCommerce.
+# Нужны, чтобы разные формулировки повода вели в один раздел (напр. «1 сентября»,
+# «школа», «учителю» -> «БУКЕТЫ К 1 СЕНТЯБРЯ»).
+_CATEGORY_ALIASES = {
+    "1 СЕНТЯБРЯ": "1 СЕНТЯБРЯ",
+    "1СЕНТЯБРЯ": "1 СЕНТЯБРЯ",
+    "ПЕРВОЕ СЕНТЯБРЯ": "1 СЕНТЯБРЯ",
+    "ШКОЛА": "1 СЕНТЯБРЯ",
+    "УЧИТЕЛЬ": "1 СЕНТЯБРЯ",
+    "УЧИТЕЛЮ": "1 СЕНТЯБРЯ",
+    "ЛИНЕЙКА": "1 СЕНТЯБРЯ",
+}
+
 
 @dataclass
 class Product:
@@ -139,6 +152,7 @@ class Catalog:
         limit: int = 3,
         exclude_urls: set[str] | None = None,
         on_sale: bool = False,
+        category: str | None = None,
     ) -> list[Product]:
         """Подбор товаров по бюджету и текстовому запросу.
 
@@ -169,6 +183,19 @@ class Catalog:
             p for p in items
             if not (_ACCESSORY_CATEGORIES & {c.strip().upper() for c in p.categories})
         ]
+
+        # Фильтр по разделу каталога (напр. «1 сентября»): оставляем только товары
+        # этой категории. Мягкий — если ничего не совпало, категорию игнорируем,
+        # чтобы не вернуть пусто вместо подбора.
+        if category:
+            want = category.strip().upper()
+            want = _CATEGORY_ALIASES.get(want, want)
+            in_cat = [
+                p for p in items
+                if any(want in c.strip().upper() for c in p.categories)
+            ]
+            if in_cat:
+                items = in_cat
 
         if budget_min is not None:
             items = [p for p in items if p.price >= budget_min * 0.9]
