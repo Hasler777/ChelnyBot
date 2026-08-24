@@ -586,10 +586,13 @@ function label(from){ return from==='manager'?'Менеджер':from==='bot'?'�
 function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 const SRC_LABEL = { tg:'Telegram', web:'Сайт', max:'MAX' };
 function srcBadge(ch){ const c=SRC_LABEL[ch]?ch:'tg'; return `<span class="badge src ${c}">${SRC_LABEL[c]}</span>`; }
-// Итоговый источник клиента для сводки: для TG — UTM-метка кампании
-// (или «Прямой вход» / «Не размечен»), для веба и MAX — сам канал.
+// Итоговый источник клиента для сводки. Если клиент пришёл по РАЗМЕЧЕННОЙ ссылке
+// (есть utm_source) — показываем саму кампанию в ЛЮБОМ канале, чтобы в дашборде
+// сразу было видно, по какой ссылке перешёл клиент (в т.ч. из MAX). Без метки —
+// показываем канал: веб → «Сайт», MAX → «MAX», TG → «Прямой вход»/«Не размечен».
 function sourceLabel(u){
   const ch = u.channel || 'tg';
+  if(u.utm_source && u.utm_label) return u.utm_label;
   if(ch === 'web') return 'Сайт';
   if(ch === 'max') return 'MAX';
   return u.utm_label || 'Не размечен';

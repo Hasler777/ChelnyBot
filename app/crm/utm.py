@@ -104,8 +104,9 @@ def admin_label(
         return "Прямой вход"
     bucket = channel_bucket(channel)
     if custom and p in custom:
-        by_ch = custom[p]
-        lab = by_ch.get(bucket) or next(iter(by_ch.values()), None)
+        # Только подпись СВОЕГО канала: не подставляем MAX-имя TG-клиенту и наоборот
+        # (у одного кода метки бывают разные кампании в TG и MAX).
+        lab = custom[p].get(bucket)
         if lab:
             return lab
     label = SOURCE_LABELS.get(p)
