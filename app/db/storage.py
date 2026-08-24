@@ -458,38 +458,57 @@ class Storage:
         )
         await self.db.commit()
 
-    async def users_overview(self) -> list[dict]:
-        """Сводка по всем пользователям: профиль, число сообщений и стоимость."""
-        cur = await self.db.execute(
-            """
+    async def users_overview(
+        self, since: float | None = None, until: float | None = None
+    ) -> list[dict]:
+        """Сводка по пользователям: профиль, число сообщений и стоимость.
+
+        since/until (эпоха) — окно месяца: показываем клиентов, ЗАВЕДЁННЫХ в этом
+        окне (когорта месяца), а сообщения/расход по каждому считаем тоже в окне.
+        Без окна — все клиенты за всё время."""
+        windowed = since is not None and until is not None
+        mwin = "AND m.ts >= ? AND m.ts < ?" if windowed else ""
+        gwin = "AND g.ts >= ? AND g.ts < ?" if windowed else ""
+        ucond = "WHERE u.created_at >= ? AND u.created_at < ?" if windowed else ""
+        sql = f"""
             SELECT u.tg_id, u.name, u.phone, u.state, u.amo_lead_id,
                    COALESCE(u.channel, 'tg') AS channel,
                    u.utm_source,
                    u.created_at, u.updated_at,
-                   (SELECT COUNT(*) FROM messages m WHERE m.tg_id = u.tg_id) AS msg_count,
-                   (SELECT MAX(ts) FROM messages m WHERE m.tg_id = u.tg_id) AS last_ts,
-                   (SELECT COALESCE(SUM(cost), 0) FROM usage g WHERE g.tg_id = u.tg_id) AS cost,
-                   (SELECT COALESCE(SUM(total_tokens), 0) FROM usage g WHERE g.tg_id = u.tg_id) AS tokens,
-                   (SELECT COUNT(*) FROM usage g WHERE g.tg_id = u.tg_id) AS llm_calls
+                   (SELECT COUNT(*) FROM messages m WHERE m.tg_id = u.tg_id {mwin}) AS msg_count,
+                   (SELECT MAX(ts) FROM messages m WHERE m.tg_id = u.tg_id {mwin}) AS last_ts,
+                   (SELECT COALESCE(SUM(cost), 0) FROM usage g WHERE g.tg_id = u.tg_id {gwin}) AS cost,
+                   (SELECT COALESCE(SUM(total_tokens), 0) FROM usage g WHERE g.tg_id = u.tg_id {gwin}) AS tokens,
+                   (SELECT COUNT(*) FROM usage g WHERE g.tg_id = u.tg_id {gwin}) AS llm_calls
             FROM users u
+            {ucond}
             ORDER BY (last_ts IS NULL), last_ts DESC
-            """
-        )
+        """
+        params: list = []
+        if windowed:
+            w = [since, until]
+            params += w * 5  # msg_count, last_ts, cost, tokens, llm_calls
+            params += w      # ucond (created_at)
+        cur = await self.db.execute(sql, params)
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def totals(self) -> dict:
-        """Глобальные итоги для шапки админки."""
-        cur = await self.db.execute(
-            "SELECT COUNT(*) AS users FROM users"
-        )
+    async def totals(self, since: float | None = None, until: float | None = None) -> dict:
+        """Глобальные итоги для шапки. С окном месяца: клиенты, заведённые в окне;
+        сообщения и расход — за это же окно (весь объём месяца)."""
+        windowed = since is not None and until is not None
+        ucond = "WHERE created_at >= ? AND created_at < ?" if windowed else ""
+        tscond = "WHERE ts >= ? AND ts < ?" if windowed else ""
+        w = [since, until] if windowed else []
+        cur = await self.db.execute(f"SELECT COUNT(*) AS users FROM users {ucond}", w)
         users = (await cur.fetchone())["users"]
         cur = await self.db.execute(
-            "SELECT COALESCE(SUM(cost), 0) AS cost, "
-            "COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls FROM usage"
+            f"SELECT COALESCE(SUM(cost), 0) AS cost, "
+            f"COALESCE(SUM(total_tokens), 0) AS tokens, COUNT(*) AS calls FROM usage {tscond}",
+            w,
         )
         row = await cur.fetchone()
-        cur = await self.db.execute("SELECT COUNT(*) AS msgs FROM messages")
+        cur = await self.db.execute(f"SELECT COUNT(*) AS msgs FROM messages {tscond}", w)
         msgs = (await cur.fetchone())["msgs"]
         return {
             "users": users,
@@ -516,11 +535,21 @@ class Storage:
         await self.db.commit()
         return await self.wallet_balance()
 
-    async def client_dialog_texts(self, hidden: set[int] | None = None) -> list[str]:
+    async def client_dialog_texts(
+        self, hidden: set[int] | None = None,
+        since: float | None = None, until: float | None = None,
+    ) -> list[str]:
         """Склеенный текст сообщений КЛИЕНТА (role='user') по каждому диалогу.
-        Одна строка на tg_id. hidden — tg_id, которые исключить (скрытые из /owner)."""
+        Одна строка на tg_id. hidden — tg_id, которые исключить (скрытые из /owner).
+        since/until — окно месяца по ts сообщения (для помесячного анализа)."""
+        win = ""
+        params: list = []
+        if since is not None and until is not None:
+            win = "AND ts >= ? AND ts < ?"
+            params = [since, until]
         cur = await self.db.execute(
-            "SELECT tg_id, content FROM messages WHERE role = 'user' ORDER BY tg_id, id"
+            f"SELECT tg_id, content FROM messages WHERE role = 'user' {win} ORDER BY tg_id, id",
+            params,
         )
         rows = await cur.fetchall()
         by_id: dict[int, list[str]] = {}

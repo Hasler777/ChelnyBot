@@ -111,10 +111,25 @@ def _check(token: str | None, secret: str) -> bool:
     return not secret or token == secret
 
 
+def _window(request: web.Request) -> tuple[float | None, float | None]:
+    """Окно периода из query (?since=&until= в секундах эпохи) — для помесячной
+    статистики. Границы месяца считает фронт в локальном часовом поясе. Нет
+    параметров или мусор — окна нет (вся статистика за всё время)."""
+    try:
+        since = float(request.query["since"])
+        until = float(request.query["until"])
+    except (KeyError, ValueError):
+        return None, None
+    if until <= since:
+        return None, None
+    return since, until
+
+
 async def _users_response(
-    markup: float, hidden: set[int] | None = None, with_wallet: bool = False
+    markup: float, hidden: set[int] | None = None, with_wallet: bool = False,
+    since: float | None = None, until: float | None = None,
 ) -> web.Response:
-    users = await storage.users_overview()
+    users = await storage.users_overview(since, until)
     # человекочитаемая подпись UTM-источника (для сводки «Источники трафика»);
     # имена кампаний, заведённых владельцем в админке, важнее статичного справочника
     labels = await storage.utm_labels_map()
@@ -132,7 +147,7 @@ async def _users_response(
             "cost": sum(u.get("cost") or 0 for u in users),
         }
     else:
-        totals = await storage.totals()
+        totals = await storage.totals(since, until)
     if markup and markup != 1.0:
         for u in users:
             u["cost"] = (u.get("cost") or 0) * markup
@@ -205,7 +220,8 @@ async def _dialog_response(request: web.Request, markup: float) -> web.Response:
 async def api_users(request: web.Request) -> web.Response:
     if not _check(request.query.get("token"), settings.admin_token):
         return web.json_response({"error": "forbidden"}, status=403)
-    return await _users_response(1.0)
+    since, until = _window(request)
+    return await _users_response(1.0, since=since, until=until)
 
 
 async def api_dialog(request: web.Request) -> web.Response:
@@ -218,8 +234,10 @@ async def api_dialog(request: web.Request) -> web.Response:
 async def owner_users(request: web.Request) -> web.Response:
     if not _check(request.query.get("token"), settings.owner_token):
         return web.json_response({"error": "forbidden"}, status=403)
+    since, until = _window(request)
     return await _users_response(
-        settings.owner_cost_markup, settings.owner_hidden_ids, with_wallet=True
+        settings.owner_cost_markup, settings.owner_hidden_ids, with_wallet=True,
+        since=since, until=until,
     )
 
 
@@ -236,8 +254,10 @@ async def owner_dialog(request: web.Request) -> web.Response:
     return await _dialog_response(request, settings.owner_cost_markup)
 
 
-async def _analysis_response(hidden: set[int] | None) -> web.Response:
-    texts = await storage.client_dialog_texts(hidden)
+async def _analysis_response(
+    hidden: set[int] | None, since: float | None = None, until: float | None = None
+) -> web.Response:
+    texts = await storage.client_dialog_texts(hidden, since, until)
     return web.json_response(analyze(texts))
 
 
@@ -285,7 +305,8 @@ async def _utm_create(request: web.Request) -> web.Response:
 async def api_analysis(request: web.Request) -> web.Response:
     if not _check(request.query.get("token"), settings.admin_token):
         return web.json_response({"error": "forbidden"}, status=403)
-    return await _analysis_response(None)
+    since, until = _window(request)
+    return await _analysis_response(None, since, until)
 
 
 async def api_utm(request: web.Request) -> web.Response:
@@ -303,7 +324,8 @@ async def api_utm_create(request: web.Request) -> web.Response:
 async def owner_analysis(request: web.Request) -> web.Response:
     if not _check(request.query.get("token"), settings.owner_token):
         return web.json_response({"error": "forbidden"}, status=403)
-    return await _analysis_response(settings.owner_hidden_ids)
+    since, until = _window(request)
+    return await _analysis_response(settings.owner_hidden_ids, since, until)
 
 
 async def owner_utm(request: web.Request) -> web.Response:
@@ -394,6 +416,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .stat span { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
   #search { margin-left:auto; background:var(--bg); border:1px solid var(--line); border-radius:8px; color:var(--txt); padding:8px 12px; font-size:13px; min-width:200px; }
   .wallet { display:flex; align-items:center; gap:16px; background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:10px 16px; }
+  .period { margin-left:auto; background:var(--panel2); border:1px solid var(--line); border-radius:9px; color:var(--txt); padding:8px 12px; font-size:13px; font-family:inherit; cursor:pointer; }
   .wallet .wrem { font-size:20px; font-weight:700; color:#7ee2a8; line-height:1.1; }
   .wallet .wrem.neg { color:#f08a8a; }
   .wallet .wlabel { display:block; font-size:10px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
@@ -491,6 +514,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
   <div class="content">
   <header>
     <div class="stats" id="stats"></div>
+    <select class="period" id="period" title="Период статистики"></select>
     <div class="wallet" id="wallet" style="display:none"></div>
   </header>
   <main>
@@ -598,9 +622,33 @@ function sourceLabel(u){
   return u.utm_label || 'Не размечен';
 }
 
+// ---- период статистики (помесячно) ----
+const MONTHS_RU = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+function periodQS(){
+  const v = (document.getElementById('period')||{}).value || '';
+  if(!v) return '';                          // «Всё время» — без окна
+  const [y,m] = v.split('-').map(Number);
+  const since = Math.floor(new Date(y, m-1, 1).getTime()/1000);   // начало месяца (локально)
+  const until = Math.floor(new Date(y, m, 1).getTime()/1000);     // начало следующего
+  return `&since=${since}&until=${until}`;
+}
+function initPeriod(){
+  const sel = document.getElementById('period');
+  if(!sel) return;
+  const now = new Date();
+  const opts = ['<option value="">Всё время</option>'];
+  for(let i=0;i<12;i++){
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    opts.push(`<option value="${ym}">${MONTHS_RU[d.getMonth()]} ${d.getFullYear()}</option>`);
+  }
+  sel.innerHTML = opts.join('');
+  sel.onchange = ()=>loadUsers();            // loadUsers сам дёрнет loadAnalysis
+}
+
 async function loadUsers(){
   let r;
-  try { r = await fetch(`${API}/api/users?token=${encodeURIComponent(token)}`); }
+  try { r = await fetch(`${API}/api/users?token=${encodeURIComponent(token)}${periodQS()}`); }
   catch(e){ document.getElementById('empty').textContent='Ошибка сети'; return; }
   if(r.status===403){ promptToken(); return; }
   const j = await r.json();
@@ -638,7 +686,7 @@ function plural(n,a,b,c){ n=Math.abs(n)%100; const n1=n%10; if(n>10&&n<20)return
 
 async function loadAnalysis(){
   let r;
-  try { r = await fetch(`${API}/api/analysis?token=${encodeURIComponent(token)}`); }
+  try { r = await fetch(`${API}/api/analysis?token=${encodeURIComponent(token)}${periodQS()}`); }
   catch(e){ return; }
   if(!r.ok) return;
   renderAnalysis(await r.json());
@@ -857,6 +905,7 @@ async function createUtm(){
 }
 document.getElementById('utmadd').onclick=createUtm;
 
+initPeriod();
 loadUsers();
 setInterval(loadUsers, 15000);
 </script>
