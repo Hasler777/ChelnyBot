@@ -760,7 +760,7 @@ function render(){
     <tr data-id="${u.tg_id}">
       <td>${esc(u.name||'Без имени')}<div class="muted" style="font-size:11px">id ${u.tg_id}</div></td>
       <td>${esc(u.phone||'—')}</td>
-      <td>${srcBadge(u.channel)}</td>
+      <td>${srcBadge(u.channel)}${(u.utm_source && u.utm_label) ? `<div class="muted" style="font-size:11px;margin-top:3px">${esc(u.utm_label)}</div>` : ''}</td>
       <td><span class="badge ${u.state}">${u.state==='handoff'?'у флориста':'бот'}</span></td>
       <td class="num">${u.msg_count||0}</td>
       <td class="num">${u.llm_calls||0}</td>
