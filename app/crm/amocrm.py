@@ -301,6 +301,61 @@ class AmoClient:
                 await asyncio.sleep(delay)
         return None
 
+    @staticmethod
+    def _digits(s: str | None) -> str:
+        return "".join(ch for ch in (s or "") if ch.isdigit())
+
+    async def _contact_matches(self, contact_id, want_name: str, want_phone: str) -> bool:
+        """Контакт совпадает с клиентом по имени ИЛИ телефону (последние 10 цифр)."""
+        if not contact_id:
+            return False
+        try:
+            c = await self.get(f"/api/v4/contacts/{contact_id}")
+        except AmoError:
+            return False
+        if want_name and (c.get("name") or "").strip().lower() == want_name:
+            return True
+        if want_phone:
+            for f in c.get("custom_fields_values") or []:
+                if f.get("field_code") == "PHONE":
+                    for v in f.get("values", []):
+                        if self._digits(v.get("value"))[-10:] == want_phone:
+                            return True
+        return False
+
+    async def find_recent_lead_for_client(self, *, name: str = "", phone: str = "",
+                                          attempts: int = 12, delay: float = 2.0,
+                                          within: float = 1200.0) -> int | None:
+        """Найти сделку, которую amoJo создал под чат клиента.
+
+        В режиме amoJo сделка ложится на СОБСТВЕННЫЙ контакт чата (по chat-user),
+        а не на наш REST-контакт — поэтому ищем среди свежих сделок аккаунта и
+        матчим по имени контакта и/или телефону клиента. Несколько попыток с
+        паузой: сделку чат заводит асинхронно."""
+        want_name = (name or "").strip().lower()
+        want_phone = self._digits(phone)[-10:]
+        if not want_name and not want_phone:
+            return None
+        for i in range(attempts):
+            try:
+                data = await self.get(
+                    "/api/v4/leads",
+                    {"order[created_at]": "desc", "limit": "20", "with": "contacts"},
+                )
+            except AmoError as exc:
+                log.warning("Не удалось получить свежие сделки: %s", exc)
+                return None
+            now = time.time()
+            for lead in data.get("_embedded", {}).get("leads", []) or []:
+                if now - float(lead.get("created_at") or 0) > within:
+                    continue
+                for c in lead.get("_embedded", {}).get("contacts", []) or []:
+                    if await self._contact_matches(c.get("id"), want_name, want_phone):
+                        return int(lead["id"])
+            if i < attempts - 1:
+                await asyncio.sleep(delay)
+        return None
+
     async def apply_source_to_lead(self, contact_id: int, source_label: str, *,
                                    lead_id: int | None = None) -> None:
         """Проставить источник трафика на сделку контакта: тег + поле AMO_CF_SOURCE.

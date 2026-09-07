@@ -18,16 +18,27 @@ HANDOFF_MESSAGE = "Передаю флористу — он сейчас под�
 _source_tasks: set[asyncio.Task] = set()
 
 
-def _tag_source_async(contact_id: int, source_label: str) -> None:
-    """Фоново проставить источник на сделку (её создаёт чат amoJo асинхронно).
+def _tag_source_async(contact_id: int, source_label: str,
+                      name: str = "", phone: str = "") -> None:
+    """Фоново проставить источник на сделку.
 
-    Ставим ДВАЖДЫ с паузой: чат amoJo может дозавести/пересоздать сделку уже
-    после первой простановки и перетереть теги. Повтор читает текущие теги и
-    домёрживает наш источник — идемпотентно, гонку в обе стороны переживает."""
+    В режиме amoJo сделку создаёт чат на СВОЁМ контакте (не на нашем REST-контакте),
+    поэтому ищем её среди свежих сделок аккаунта по имени/телефону клиента. Ставим
+    тег ДВАЖДЫ с паузой: чат amoJo может дозавести карточку уже после первой
+    простановки и перетереть теги; повтор читает текущие теги и домёрживает наш
+    источник (идемпотентно)."""
     async def _run() -> None:
-        await amo.apply_source_to_lead(contact_id, source_label)
+        lead_id = await amo.find_recent_lead_for_client(name=name, phone=phone)
+        if not lead_id:
+            # запасной путь — вдруг сделка всё же на нашем контакте
+            lead_id = await amo.find_latest_lead_for_contact(contact_id, attempts=3, delay=2.0)
+        if not lead_id:
+            log.warning("Сделка клиента (%s / %s) не найдена — источник «%s» не проставлен",
+                        name or "—", phone or "—", source_label)
+            return
+        await amo.apply_source_to_lead(contact_id, source_label, lead_id=lead_id)
         await asyncio.sleep(25)
-        await amo.apply_source_to_lead(contact_id, source_label)
+        await amo.apply_source_to_lead(contact_id, source_label, lead_id=lead_id)
 
     task = asyncio.create_task(_run())
     _source_tasks.add(task)
@@ -138,7 +149,8 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
             # Сделку чат создаёт асинхронно по входящему сообщению — фоново
             # находим её и вешаем тег/поле источника (не задерживаем ответ клиенту).
             if contact_id:
-                _tag_source_async(contact_id, source_label)
+                _tag_source_async(contact_id, source_label,
+                                  name=data.name or "", phone=data.phone or "")
         except Exception as exc:  # noqa: BLE001
             log.exception("Не удалось открыть чат в amoJo: %s", exc)
 
