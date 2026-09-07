@@ -57,9 +57,10 @@ async def do_handoff(tg_id: int, data: HandoffData) -> str:
     user = await storage.get_user(tg_id)
     existing_contact_id = user.amo_contact_id if user else None
     # метка канала (UTM из deeplink /start) для аналитики — с учётом канала
-    # клиента: MAX-бот даёт префикс MAX_bot_, Telegram/веб — TG_bot_.
+    # клиента (MAX_bot_/TG_bot_) и имени кампании из админки (2ГИС/Яндекс и пр.).
+    campaigns = await storage.utm_labels_map()
     source_label = utm.resolve_source(
-        user.utm_source if user else "", user.channel if user else "tg"
+        user.utm_source if user else "", user.channel if user else "tg", campaigns
     )
 
     lead_id: int | None = None

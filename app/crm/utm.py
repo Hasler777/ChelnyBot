@@ -60,20 +60,33 @@ def normalize(payload: str | None) -> str:
     return p
 
 
-def resolve_source(payload: str | None, channel: str = "tg") -> str:
-    """utm-payload -> метка для amoCRM с учётом канала.
+def resolve_source(
+    payload: str | None, channel: str = "tg",
+    campaigns: dict[str, dict[str, str]] | None = None,
+) -> str:
+    """utm-payload -> метка для amoCRM (тег на сделке) с учётом канала.
 
     Один и тот же код метки (напр. vk_senler) у Telegram и у MAX даёт разные
-    метки: `TG_bot_ВК senler` и `MAX_bot_ВК senler`. Справочник SOURCE_LABELS
-    хранит TG-вариант; для MAX подменяем префикс.
+    метки: `TG_bot_ВК senler` и `MAX_bot_ВК senler`.
 
-    Пусто -> прямой вход. Известный payload -> метка из таблицы. Неизвестный
-    (новая кампания) -> `<prefix><payload>`, чтобы обращение не потерялось.
+    Приоритет источника подписи:
+      1) кампания, заведённая владельцем в админке (`campaigns` из
+         storage.utm_labels_map(), вложенный {payload:{tg|max:label}}) — так тег
+         совпадёт с названием кампании (2ГИС/Яндекс и пр.), а не будет «сырым»;
+      2) статический справочник SOURCE_LABELS (хранит TG-вариант, префикс канала
+         подменяем);
+      3) неизвестный payload -> `<prefix><payload>`, чтобы обращение не потерялось.
+    Пусто -> прямой вход.
     """
     prefix = _prefix(channel)
     p = normalize(payload)
     if not p:
         return DEFAULT_SOURCE.replace("TG_bot_", prefix)
+    if campaigns:
+        lab = (campaigns.get(p) or {}).get(channel_bucket(channel))
+        if lab:
+            # если владелец уже задал имя с префиксом канала — оставляем как есть
+            return lab if lab.startswith(("TG_bot_", "MAX_bot_")) else f"{prefix}{lab}"
     label = SOURCE_LABELS.get(p)
     if label:
         return label.replace("TG_bot_", prefix)
