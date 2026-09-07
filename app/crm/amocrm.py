@@ -281,7 +281,7 @@ class AmoClient:
 
     # ---------- источник трафика (UTM) на сделке из чата amoJo ----------
     async def find_latest_lead_for_contact(self, contact_id: int, *,
-                                           attempts: int = 6, delay: float = 1.5) -> int | None:
+                                           attempts: int = 12, delay: float = 2.0) -> int | None:
         """Вернуть id самой свежей сделки контакта.
 
         В режиме amoJo сделку создаёт сам чат — асинхронно, уже после отправки

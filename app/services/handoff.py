@@ -19,8 +19,17 @@ _source_tasks: set[asyncio.Task] = set()
 
 
 def _tag_source_async(contact_id: int, source_label: str) -> None:
-    """Фоново проставить источник на сделку (её создаёт чат amoJo асинхронно)."""
-    task = asyncio.create_task(amo.apply_source_to_lead(contact_id, source_label))
+    """Фоново проставить источник на сделку (её создаёт чат amoJo асинхронно).
+
+    Ставим ДВАЖДЫ с паузой: чат amoJo может дозавести/пересоздать сделку уже
+    после первой простановки и перетереть теги. Повтор читает текущие теги и
+    домёрживает наш источник — идемпотентно, гонку в обе стороны переживает."""
+    async def _run() -> None:
+        await amo.apply_source_to_lead(contact_id, source_label)
+        await asyncio.sleep(25)
+        await amo.apply_source_to_lead(contact_id, source_label)
+
+    task = asyncio.create_task(_run())
     _source_tasks.add(task)
     task.add_done_callback(_source_tasks.discard)
 
