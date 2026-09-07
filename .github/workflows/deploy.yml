@@ -39,9 +39,14 @@ jobs:
       - name: Health check
         run: |
           ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" '
-            sleep 4
             echo "container: $(docker ps --filter name=sonya-bot-1 --format "{{.Status}}")"
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/admin)
-            echo "GET /admin -> $code"
-            test "$code" = "200"
+            # приложение поднимается несколько секунд — ждём с ретраями, а не одной ранней проверкой
+            for i in $(seq 1 20); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/admin)
+              echo "try $i: GET /admin -> $code"
+              [ "$code" = "200" ] && exit 0
+              sleep 2
+            done
+            echo "health check failed after retries"
+            exit 1
           '
