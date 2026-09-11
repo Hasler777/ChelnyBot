@@ -485,7 +485,9 @@ _ADMIN_HTML = """<!DOCTYPE html>
   /* раздел «Реклама (UTM)» */
   .panel h2.ptitle { font-size:17px; margin:2px 0 4px; }
   .panel .psub { font-size:12px; color:var(--mut); margin-bottom:16px; }
-  #panel-dialogs #search { margin:0 0 14px; display:block; }
+  .dlg-toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:0 0 14px; }
+  #panel-dialogs #search { margin:0; display:block; flex:1; min-width:220px; }
+  #srcfilter { background:var(--panel2); border:1px solid var(--line); border-radius:9px; color:var(--txt); padding:9px 12px; font-size:13px; font-family:inherit; cursor:pointer; max-width:320px; }
   .utm-form { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:22px; }
   .utm-form .fld { display:flex; flex-direction:column; gap:5px; }
   .utm-form label { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
@@ -533,7 +535,10 @@ _ADMIN_HTML = """<!DOCTYPE html>
     </section>
 
     <section class="panel" id="panel-dialogs">
-    <input id="search" placeholder="Поиск по имени / телефону / id…">
+    <div class="dlg-toolbar">
+      <input id="search" placeholder="Поиск по имени / телефону / id…">
+      <select id="srcfilter" title="Фильтр по источнику"><option value="">Все источники</option></select>
+    </div>
     <table>
       <thead><tr>
         <th data-k="name">Клиент</th>
@@ -657,6 +662,7 @@ async function loadUsers(){
   renderStats(j.totals);
   renderWallet(j.wallet);
   renderSources();
+  fillSrcFilter();
   render();
   loadAnalysis();
 }
@@ -743,12 +749,29 @@ function renderStats(t){
   ].map(([s,v])=>`<div class="stat"><b>${v}</b><span>${s}</span></div>`).join('');
 }
 
+function fillSrcFilter(){
+  const sel = document.getElementById('srcfilter');
+  if(!sel) return;
+  const cur = sel.value;
+  const counts = new Map();
+  for(const u of data){ const k = sourceLabel(u); counts.set(k, (counts.get(k)||0)+1); }
+  const items = [...counts.entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0]));
+  sel.innerHTML = '';
+  const all = document.createElement('option'); all.value=''; all.textContent='Все источники'; sel.appendChild(all);
+  for(const [k,c] of items){ const o=document.createElement('option'); o.value=k; o.textContent=`${k} (${c})`; sel.appendChild(o); }
+  if(cur) sel.value = cur;          // сохраняем выбор при автообновлении
+  sel.onchange = render;
+}
+
 function render(){
   const q = (document.getElementById('search').value||'').toLowerCase().trim();
-  let rows = data.filter(u => !q ||
-    (u.name||'').toLowerCase().includes(q) ||
-    (u.phone||'').toLowerCase().includes(q) ||
-    String(u.tg_id).includes(q));
+  const src = (document.getElementById('srcfilter')||{}).value || '';
+  let rows = data.filter(u =>
+    (!q ||
+      (u.name||'').toLowerCase().includes(q) ||
+      (u.phone||'').toLowerCase().includes(q) ||
+      String(u.tg_id).includes(q))
+    && (!src || sourceLabel(u) === src));
   rows.sort((a,b)=>{
     let x=a[sortK], y=b[sortK];
     if(typeof x==='string'||typeof y==='string'){ x=(x||'').toString(); y=(y||'').toString(); return x.localeCompare(y)*sortDir; }
