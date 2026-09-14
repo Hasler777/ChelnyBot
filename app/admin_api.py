@@ -353,11 +353,13 @@ async def owner_wallet_topup(request: web.Request) -> web.Response:
     return web.json_response({"balance": balance})
 
 
-def _page(api_base: str, show_tokens: bool = True, show_wallet: bool = False) -> web.Response:
+def _page(api_base: str, show_tokens: bool = True, show_wallet: bool = False,
+          show_prices: bool = True) -> web.Response:
     html = (_ADMIN_HTML.replace("__API_BASE__", api_base)
                        .replace("__LOGO__", _LOGO_URI)
                        .replace("__SHOW_TOKENS__", "true" if show_tokens else "false")
-                       .replace("__SHOW_WALLET__", "true" if show_wallet else "false"))
+                       .replace("__SHOW_WALLET__", "true" if show_wallet else "false")
+                       .replace("__SHOW_PRICES__", "true" if show_prices else "false"))
     return web.Response(text=html, content_type="text/html")
 
 
@@ -369,6 +371,12 @@ async def get_owner_page(request: web.Request) -> web.Response:
     return _page("/owner", show_tokens=False, show_wallet=True)
 
 
+async def get_demo_page(request: web.Request) -> web.Response:
+    # Кабинет ЦветоМира БЕЗ цен (для показа клиенту): те же данные /owner, но
+    # стоимость/расходы/бюджет/кошелёк/техметрики скрыты в интерфейсе.
+    return _page("/owner", show_tokens=False, show_wallet=False, show_prices=False)
+
+
 def add_admin_routes(app: web.Application) -> None:
     app.router.add_get("/admin", get_admin_page)
     app.router.add_get("/admin/api/users", api_users)
@@ -377,6 +385,7 @@ def add_admin_routes(app: web.Application) -> None:
     app.router.add_get("/admin/api/utm", api_utm)
     app.router.add_post("/admin/api/utm", api_utm_create)
     app.router.add_get("/owner", get_owner_page)
+    app.router.add_get("/demo", get_demo_page)  # кабинет без цен (данные /owner)
     app.router.add_get("/owner/api/users", owner_users)
     app.router.add_get("/owner/api/dialog", owner_dialog)
     app.router.add_get("/owner/api/analysis", owner_analysis)
@@ -463,6 +472,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
   .bubble-file { display:inline-block; padding:8px 11px; border-radius:12px; background:var(--panel2); color:#79b8ff; font-size:13px; text-decoration:none; }
   #empty { color:var(--mut); text-align:center; padding:40px 0; }
   .no-tokens .col-tokens { display:none; }
+  .no-prices .col-tokens, .no-prices .col-cost, .no-prices .col-calls { display:none; }
   /* анализ диалогов */
   .analysis { margin-top:30px; }
   .analysis h2 { font-size:15px; margin:0 0 2px; }
@@ -546,9 +556,9 @@ _ADMIN_HTML = """<!DOCTYPE html>
         <th data-k="channel">Источник</th>
         <th data-k="state">Статус</th>
         <th data-k="msg_count" class="num">Сообщений</th>
-        <th data-k="llm_calls" class="num">Запросов</th>
+        <th data-k="llm_calls" class="num col-calls">Запросов</th>
         <th data-k="tokens" class="num col-tokens">Токенов</th>
-        <th data-k="cost" class="num">Стоимость</th>
+        <th data-k="cost" class="num col-cost">Стоимость</th>
         <th data-k="last_ts" class="num">Активность</th>
       </tr></thead>
       <tbody id="rows"><tr><td colspan="9" id="empty">Загрузка…</td></tr></tbody>
@@ -592,7 +602,9 @@ _ADMIN_HTML = """<!DOCTYPE html>
 const API = '__API_BASE__';
 const SHOW_TOKENS = __SHOW_TOKENS__;
 const SHOW_WALLET = __SHOW_WALLET__;
+const SHOW_PRICES = __SHOW_PRICES__;
 if(!SHOW_TOKENS) document.documentElement.classList.add('no-tokens');
+if(!SHOW_PRICES) document.documentElement.classList.add('no-prices');
 const qs = new URLSearchParams(location.search);
 let token = qs.get('token') || localStorage.getItem(API + '_token') || '';
 let rate = 0;
@@ -745,7 +757,7 @@ function renderStats(t){
     ['У флориста', atFlorist],
     ['Сообщений', t.messages],
     ...(SHOW_TOKENS ? [['LLM-запросов', t.calls], ['Токенов', (t.tokens||0).toLocaleString('ru-RU')]] : []),
-    ['Затраты всего', money(t.cost)],
+    ...(SHOW_PRICES ? [['Затраты всего', money(t.cost)]] : []),
   ].map(([s,v])=>`<div class="stat"><b>${v}</b><span>${s}</span></div>`).join('');
 }
 
@@ -786,9 +798,9 @@ function render(){
       <td>${srcBadge(u.channel)}${(u.utm_source && u.utm_label) ? `<div class="muted" style="font-size:11px;margin-top:3px">${esc(u.utm_label)}</div>` : ''}</td>
       <td><span class="badge ${u.state}">${u.state==='handoff'?'у флориста':'бот'}</span></td>
       <td class="num">${u.msg_count||0}</td>
-      <td class="num">${u.llm_calls||0}</td>
+      <td class="num col-calls">${u.llm_calls||0}</td>
       <td class="num col-tokens">${(u.tokens||0).toLocaleString('ru-RU')}</td>
-      <td class="num cost">${money(u.cost)}</td>
+      <td class="num cost col-cost">${money(u.cost)}</td>
       <td class="num muted">${fmt(u.last_ts)}</td>
     </tr>`).join('');
   tb.querySelectorAll('tr').forEach(tr=>tr.onclick=()=>openDialog(tr.dataset.id));
@@ -808,9 +820,9 @@ async function openDialog(tgId){
   document.getElementById('dname').textContent = u.name||'Без имени';
   document.getElementById('dsub').innerHTML = `id ${u.tg_id}${u.phone?' · '+esc(u.phone):''}${u.amo_lead_id?' · сделка #'+u.amo_lead_id:''} · <span class="muted">источник:</span> ${esc(sourceLabel(u))}`;
   document.getElementById('dcost').innerHTML = [
-    ['Стоимость диалога', money(c.cost)],
+    ...(SHOW_PRICES ? [['Стоимость диалога', money(c.cost)]] : []),
     ...(SHOW_TOKENS ? [['Токенов', (c.tokens||0).toLocaleString('ru-RU')]] : []),
-    ['LLM-запросов', c.calls||0],
+    ...(SHOW_PRICES ? [['LLM-запросов', c.calls||0]] : []),
   ].map(([s,v])=>`<div><span class="muted">${s}</span><b>${v}</b></div>`).join('');
   const log=document.getElementById('log');
   const msgs=j.messages||[];
