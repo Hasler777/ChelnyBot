@@ -75,6 +75,8 @@ async def _run_consult(tg_id: int, text: str, *, store_text: str | None = None,
         return FALLBACK_ERROR
     await storage.add_message(tg_id, "user", store_text or text, media_url=media_url,
                               media_type=media_type, media_name=media_name)
+    if result.silent:
+        return ""  # ИИ на паузе — молчим (сообщение клиента сохранили)
     if result.handoff is not None:
         reply = await handoff.do_handoff(tg_id, result.handoff)
         await storage.add_message(tg_id, "assistant", reply)
@@ -98,7 +100,8 @@ async def on_text(message: Message) -> None:
             return
 
         reply = await _run_consult(tg_id, text)
-    await message.answer(reply, disable_web_page_preview=False)
+    if reply:
+        await message.answer(reply, disable_web_page_preview=False)
 
 
 async def _extract_tg_media(message: Message) -> tuple[bytes, str, str, str | None] | None:
@@ -158,5 +161,7 @@ async def on_other(message: Message) -> None:
     reply = PHOTO_REPLY if media_type == "image" else FILE_REPLY
     await storage.add_message(tg_id, "user", store, media_url=purl,
                               media_type=media_type, media_name=fname)
+    if await consultant.ai_paused():
+        return  # ИИ на паузе — молчим (медиа клиента сохранили)
     await storage.add_message(tg_id, "assistant", reply)
     await message.answer(reply)

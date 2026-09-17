@@ -213,6 +213,9 @@ async def _web_consult_turn(uid: int, text: str, *, store_text: str | None = Non
         await storage.add_message(uid, "user", store_text or text, media_url=media_url,
                                   media_type=media_type, media_name=media_name)
 
+        if result.silent:
+            return {"ok": True, "silent": True}  # ИИ на паузе — виджет молчит
+
         if result.handoff is not None:
             reply = await handoff.do_handoff(uid, result.handoff)
             await storage.add_message(uid, "assistant", reply)
@@ -310,7 +313,7 @@ async def salesbot_reply(request: web.Request) -> web.Response:
 
     async with _lock_for(uid):
         try:
-            result = await consultant.generate(uid, message)
+            result = await consultant.generate(uid, message, honor_pause=False)
         except Exception as exc:  # noqa: BLE001
             log.exception("salesbot: ошибка генерации: %s", exc)
             return web.json_response({"reply": FALLBACK_ERROR, "handoff": False})
@@ -364,7 +367,7 @@ async def _salesbot_process(return_url: str, session: str, message: str) -> None
             await _salesbot_continue(return_url, SALESBOT_GREETING)
             return
         async with _lock_for(uid):
-            result = await consultant.generate(uid, message)
+            result = await consultant.generate(uid, message, honor_pause=False)
             await storage.add_message(uid, "user", message)
             if result.handoff is not None:
                 reply = "Передаю флористу — он подключится 🌸"

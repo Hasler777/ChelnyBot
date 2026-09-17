@@ -165,6 +165,14 @@ class HandoffData:
 class ConsultResult:
     text: str | None = None
     handoff: HandoffData | None = None
+    silent: bool = False  # ИИ на паузе — канал ничего не отвечает клиенту
+
+
+async def ai_paused() -> bool:
+    """Глобальный рубильник ИИ (флаг app_state 'ai_paused'='1'). Когда включён,
+    Соня молчит на клиентских каналах (TG/MAX/веб): сообщения принимаются и
+    сохраняются, но авто-ответа нет. Переключается на лету, без редеплоя."""
+    return (await storage.state_get("ai_paused")) == "1"
 
 
 async def _run_search(args: dict, exclude_urls: set[str] | None = None) -> tuple[str, list[Product]]:
@@ -186,8 +194,15 @@ async def _run_search(args: dict, exclude_urls: set[str] | None = None) -> tuple
     )
 
 
-async def generate(tg_id: int, user_text: str) -> ConsultResult:
-    """Сформировать ответ консультанта на сообщение пользователя."""
+async def generate(tg_id: int, user_text: str, *, honor_pause: bool = True) -> ConsultResult:
+    """Сформировать ответ консультанта на сообщение пользователя.
+
+    honor_pause=True (клиентские каналы TG/MAX/веб): при включённом рубильнике ИИ
+    возвращаем silent — канал молчит. honor_pause=False (amoCRM/salesbot-виджет):
+    пауза не действует, виджет работает как обычно (важно для модерации)."""
+    if honor_pause and await ai_paused():
+        return ConsultResult(silent=True)
+
     # Вопрос про бесплатные розы/цветы — фиксированный промо-ответ всем (мимо LLM).
     if _FREE_ROSES_RE.search(user_text or ""):
         return ConsultResult(text=FREE_ROSES_PROMO)

@@ -149,6 +149,8 @@ class MaxBot:
             # порядок как в Telegram/web: вопрос -> ответ
             await storage.add_message(uid, "user", text)
 
+            if result.silent:
+                return  # ИИ на паузе — молчим (сообщение клиента сохранили)
             if result.handoff is not None:
                 reply = await handoff.do_handoff(uid, result.handoff)
                 await storage.add_message(uid, "assistant", reply)
@@ -238,6 +240,8 @@ class MaxBot:
             reply = PHOTO_REPLY if media_type == "image" else FILE_REPLY
             await storage.add_message(uid, "user", store, media_url=purl,
                                       media_type=media_type, media_name="file")
+            if await consultant.ai_paused():
+                return  # ИИ на паузе — молчим (медиа клиента сохранили)
             await storage.add_message(uid, "assistant", reply)
             await self.send_message(uid, reply)
 
