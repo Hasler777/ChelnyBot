@@ -24,7 +24,7 @@ import hmac
 import json
 import logging
 import time
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 from aiohttp import web
@@ -336,8 +336,13 @@ async def _salesbot_continue(return_url: str, reply: str) -> None:
     # его value ограничен 80 символами, а ответы ИИ длиннее.
     body = {"data": {"message": reply, "status": "ok"}}
     headers = {"Content-Type": "application/json"}
-    # токен интеграции-виджета (получен при установке через /amo/oauth), иначе — старый
-    token = await storage.state_get("amo_widget_access_token") or settings.amo_access_token
+    # Токен ИМЕННО того аккаунта, куда шлём ответ (host из return_url), — иначе
+    # amoCRM отклонит чужой токен (виджет стоит на нескольких аккаунтах). Фолбэк —
+    # старый глобальный токен, затем amo_access_token.
+    host = urlparse(return_url).netloc
+    token = (await storage.state_get(f"amo_widget_token_{host}")
+             or await storage.state_get("amo_widget_access_token")
+             or settings.amo_access_token)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
@@ -464,10 +469,17 @@ async def amo_oauth(request: web.Request) -> web.Response:
                 }, timeout=aiohttp.ClientTimeout(total=20)) as r:
                     tok = await r.json(content_type=None)
             if tok.get("access_token"):
+                # ВАЖНО: токен нужен ПЕР-АККАУНТНЫЙ. Виджет ставят разные аккаунты
+                # (клиенты, модераторы), а continue надо слать токеном ИМЕННО того
+                # аккаунта, откуда пришёл запрос, иначе amoCRM отклонит чужой токен.
+                host = base.split("://", 1)[-1].strip("/")
+                await storage.state_set(f"amo_widget_token_{host}", tok["access_token"])
+                await storage.state_set(f"amo_widget_refresh_{host}", tok.get("refresh_token", ""))
+                # глобальные ключи оставляем как фолбэк (обратная совместимость)
                 await storage.state_set("amo_widget_access_token", tok["access_token"])
                 await storage.state_set("amo_widget_refresh_token", tok.get("refresh_token", ""))
                 await storage.state_set("amo_widget_base", base)
-                log.info("AMO_OAUTH: токен интеграции получен и сохранён (%s)", base)
+                log.info("AMO_OAUTH: токен интеграции получен и сохранён для %s", host)
             else:
                 log.warning("AMO_OAUTH: обмен кода не дал токен: %s", str(tok)[:300])
         except Exception as exc:  # noqa: BLE001
