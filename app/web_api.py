@@ -327,30 +327,72 @@ async def salesbot_reply(request: web.Request) -> web.Response:
         return web.json_response({"reply": reply, "handoff": False})
 
 
+async def _refresh_widget_token(base: str) -> str | None:
+    """Обновить access-токен виджета для аккаунта (base=https://<host>.amocrm.ru)
+    по refresh-токену. amoCRM access-токен живёт ~24ч — без обновления continue
+    начинает падать 401. Возвращает новый access или None."""
+    host = base.split("://", 1)[-1].strip("/")
+    rt = (await storage.state_get(f"amo_widget_refresh_{host}")
+          or await storage.state_get("amo_widget_refresh_token"))
+    if not (rt and settings.amo_widget_client_id and settings.amo_widget_secret):
+        return None
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{base}/oauth2/access_token", json={
+                "client_id": settings.amo_widget_client_id,
+                "client_secret": settings.amo_widget_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": rt,
+                "redirect_uri": f"{settings.widget_public_url.rstrip('/')}/amo/oauth",
+            }, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                tok = await r.json(content_type=None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("AMO_WIDGET: ошибка refresh для %s: %s", host, exc)
+        return None
+    at = tok.get("access_token")
+    if not at:
+        log.warning("AMO_WIDGET: refresh не дал токен (%s): %s", host, str(tok)[:200])
+        return None
+    new_rt = tok.get("refresh_token", rt)
+    await storage.state_set(f"amo_widget_token_{host}", at)
+    await storage.state_set(f"amo_widget_refresh_{host}", new_rt)
+    await storage.state_set("amo_widget_access_token", at)
+    await storage.state_set("amo_widget_refresh_token", new_rt)
+    log.info("AMO_WIDGET: access-токен обновлён для %s", host)
+    return at
+
+
 async def _salesbot_continue(return_url: str, reply: str) -> None:
-    """Продолжить Salesbot: отправить текст клиенту и завершить шаг (colбэк на
-    return_url). Пробуем с OAuth-токеном интеграции; логируем ответ, чтобы на
-    первом же тесте увидеть, работает ли формат/авторизация."""
+    """Продолжить Salesbot: отправить ответ клиенту и завершить шаг (колбэк на
+    return_url) токеном ИМЕННО того аккаунта. При 401 (протухший access-токен)
+    обновляем токен по refresh и повторяем один раз."""
     # Ответ Сони кладём в data.message — в следующем шаге бота он доступен как
     # {{json.message}} (шаг «Отправить сообщение»). Хендлер show НЕ используем:
     # его value ограничен 80 символами, а ответы ИИ длиннее.
     body = {"data": {"message": reply, "status": "ok"}}
-    headers = {"Content-Type": "application/json"}
-    # Токен ИМЕННО того аккаунта, куда шлём ответ (host из return_url), — иначе
-    # amoCRM отклонит чужой токен (виджет стоит на нескольких аккаунтах). Фолбэк —
-    # старый глобальный токен, затем amo_access_token.
     host = urlparse(return_url).netloc
+    base = f"https://{host}"
     token = (await storage.state_get(f"amo_widget_token_{host}")
              or await storage.state_get("amo_widget_access_token")
              or settings.amo_access_token)
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    try:
+
+    async def _post(tok: str | None) -> tuple[int, str]:
+        headers = {"Content-Type": "application/json"}
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
         async with aiohttp.ClientSession() as s:
             async with s.post(return_url, json=body, headers=headers,
                               timeout=aiohttp.ClientTimeout(total=20)) as r:
-                txt = await r.text()
-                log.info("SALESBOT_HANDLER continue -> %s: %s", r.status, txt[:300])
+                return r.status, await r.text()
+
+    try:
+        status, txt = await _post(token)
+        if status == 401:
+            log.info("SALESBOT_HANDLER continue 401 — обновляю токен и повторяю (%s)", host)
+            new_token = await _refresh_widget_token(base)
+            if new_token:
+                status, txt = await _post(new_token)
+        log.info("SALESBOT_HANDLER continue -> %s: %s", status, txt[:300])
     except Exception as exc:  # noqa: BLE001
         log.warning("SALESBOT_HANDLER continue error: %s", exc)
 
