@@ -362,14 +362,18 @@ async def _refresh_widget_token(base: str) -> str | None:
     return at
 
 
-async def _salesbot_continue(return_url: str, reply: str) -> None:
+async def _salesbot_continue(return_url: str, reply: str, *, handoff: bool = False) -> None:
     """Продолжить Salesbot: отправить ответ клиенту и завершить шаг (колбэк на
     return_url) токеном ИМЕННО того аккаунта. При 401 (протухший access-токен)
     обновляем токен по refresh и повторяем один раз."""
     # Ответ Сони кладём в data.message — в следующем шаге бота он доступен как
     # {{json.message}} (шаг «Отправить сообщение»). Хендлер show НЕ используем:
     # его value ограничен 80 символами, а ответы ИИ длиннее.
-    body = {"data": {"message": reply, "status": "ok"}}
+    # data.handoff = "1", когда Соня передаёт клиента живому флористу — бот по
+    # этому флагу ({{json.handoff}}) через «Условие» переводит сделку на нужный
+    # этап («На флориста») и дальше общается человек.
+    body = {"data": {"message": reply, "status": "ok",
+                     "handoff": "1" if handoff else "0"}}
     host = urlparse(return_url).netloc
     base = f"https://{host}"
     token = (await storage.state_get(f"amo_widget_token_{host}")
@@ -416,12 +420,13 @@ async def _salesbot_process(return_url: str, session: str, message: str) -> None
         async with _lock_for(uid):
             result = await consultant.generate(uid, message, honor_pause=False)
             await storage.add_message(uid, "user", message)
-            if result.handoff is not None:
+            handoff = result.handoff is not None
+            if handoff:
                 reply = "Передаю флористу — он подключится 🌸"
             else:
                 reply = result.text or FALLBACK_ERROR
             await storage.add_message(uid, "assistant", reply)
-        await _salesbot_continue(return_url, reply)
+        await _salesbot_continue(return_url, reply, handoff=handoff)
     except Exception as exc:  # noqa: BLE001
         log.exception("SALESBOT_HANDLER process error: %s", exc)
 
