@@ -362,7 +362,8 @@ async def _refresh_widget_token(base: str) -> str | None:
     return at
 
 
-async def _salesbot_continue(return_url: str, reply: str, *, handoff: bool = False) -> None:
+async def _salesbot_continue(return_url: str, reply: str, *, handoff: bool = False,
+                             finish: bool = False) -> None:
     """Продолжить Salesbot: отправить ответ клиенту и завершить шаг (колбэк на
     return_url) токеном ИМЕННО того аккаунта. При 401 (протухший access-токен)
     обновляем токен по refresh и повторяем один раз."""
@@ -374,6 +375,11 @@ async def _salesbot_continue(return_url: str, reply: str, *, handoff: bool = Fal
     # этап («На флориста») и дальше общается человек.
     body = {"data": {"message": reply, "status": "ok",
                      "handoff": "1" if handoff else "0"}}
+    if finish:
+        # Клиент уже у флориста: завершаем бота сразу, без шага «Отправить сообщение».
+        body["execute_handlers"] = [
+            {"handler": "goto", "params": {"type": "finish", "step": 0}}
+        ]
     host = urlparse(return_url).netloc
     base = f"https://{host}"
     token = (await storage.state_get(f"amo_widget_token_{host}")
@@ -418,14 +424,28 @@ async def _salesbot_process(return_url: str, session: str, message: str) -> None
             await _salesbot_continue(return_url, SALESBOT_GREETING)
             return
         async with _lock_for(uid):
-            result = await consultant.generate(uid, message, honor_pause=False)
-            await storage.add_message(uid, "user", message)
-            handoff = result.handoff is not None
-            if handoff:
-                reply = "Передаю флористу — он подключится 🌸"
+            user = await storage.get_user(uid)
+            if user and user.state == STATE_HANDOFF:
+                # Сделка уже у флориста — Соня молчит: сохраняем сообщение в историю
+                # и сразу завершаем бота, ничего клиенту не отправляя.
+                await storage.add_message(uid, "user", message)
+                silent = True
             else:
-                reply = result.text or FALLBACK_ERROR
-            await storage.add_message(uid, "assistant", reply)
+                silent = False
+                result = await consultant.generate(uid, message, honor_pause=False)
+                await storage.add_message(uid, "user", message)
+                handoff = result.handoff is not None
+                if handoff:
+                    reply = "Передаю флористу — он подключится 🌸"
+                    # запоминаем передачу: дальше по этой сделке Соня не отвечает
+                    await storage.update_user(uid, state=STATE_HANDOFF)
+                else:
+                    reply = result.text or FALLBACK_ERROR
+                await storage.add_message(uid, "assistant", reply)
+        if silent:
+            log.info("SALESBOT_HANDLER: сессия %s у флориста — бот завершён без ответа", session)
+            await _salesbot_continue(return_url, "", handoff=True, finish=True)
+            return
         await _salesbot_continue(return_url, reply, handoff=handoff)
     except Exception as exc:  # noqa: BLE001
         log.exception("SALESBOT_HANDLER process error: %s", exc)
