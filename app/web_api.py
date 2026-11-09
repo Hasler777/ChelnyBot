@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 from urllib.parse import parse_qs, urlparse
 
@@ -362,25 +363,10 @@ async def _refresh_widget_token(base: str) -> str | None:
     return at
 
 
-async def _salesbot_continue(return_url: str, reply: str, *, handoff: bool = False,
-                             finish: bool = False) -> None:
-    """Продолжить Salesbot: отправить ответ клиенту и завершить шаг (колбэк на
-    return_url) токеном ИМЕННО того аккаунта. При 401 (протухший access-токен)
-    обновляем токен по refresh и повторяем один раз."""
-    # Ответ Сони кладём в data.message — в следующем шаге бота он доступен как
-    # {{json.message}} (шаг «Отправить сообщение»). Хендлер show НЕ используем:
-    # его value ограничен 80 символами, а ответы ИИ длиннее.
-    # data.handoff = "1", когда Соня передаёт клиента живому флористу — бот по
-    # этому флагу ({{json.handoff}}) через «Условие» переводит сделку на нужный
-    # этап («На флориста») и дальше общается человек.
-    body = {"data": {"message": reply, "status": "ok",
-                     "handoff": "1" if handoff else "0"}}
-    if finish:
-        # Клиент уже у флориста: завершаем бота сразу, без шага «Отправить сообщение».
-        body["execute_handlers"] = [
-            {"handler": "goto", "params": {"type": "finish", "step": 0}}
-        ]
-    host = urlparse(return_url).netloc
+async def _amo_widget_post(url: str, body: dict, what: str) -> int | None:
+    """POST в amoCRM токеном виджета ИМЕННО того аккаунта (хост берём из url).
+    При 401 (протухший access-токен) обновляем токен по refresh и повторяем один раз."""
+    host = urlparse(url).netloc
     base = f"https://{host}"
     token = (await storage.state_get(f"amo_widget_token_{host}")
              or await storage.state_get("amo_widget_access_token")
@@ -391,60 +377,94 @@ async def _salesbot_continue(return_url: str, reply: str, *, handoff: bool = Fal
         if tok:
             headers["Authorization"] = f"Bearer {tok}"
         async with aiohttp.ClientSession() as s:
-            async with s.post(return_url, json=body, headers=headers,
+            async with s.post(url, json=body, headers=headers,
                               timeout=aiohttp.ClientTimeout(total=20)) as r:
                 return r.status, await r.text()
 
     try:
         status, txt = await _post(token)
         if status == 401:
-            log.info("SALESBOT_HANDLER continue 401 — обновляю токен и повторяю (%s)", host)
+            log.info("SALESBOT_HANDLER %s 401 — обновляю токен и повторяю (%s)", what, host)
             new_token = await _refresh_widget_token(base)
             if new_token:
                 status, txt = await _post(new_token)
-        log.info("SALESBOT_HANDLER continue -> %s: %s", status, txt[:300])
+        log.info("SALESBOT_HANDLER %s -> %s: %s", what, status, txt[:300])
+        return status
     except Exception as exc:  # noqa: BLE001
-        log.warning("SALESBOT_HANDLER continue error: %s", exc)
+        log.warning("SALESBOT_HANDLER %s error: %s", what, exc)
+        return None
+
+
+async def _salesbot_continue(return_url: str, reply: str, *, handoff: bool = False) -> None:
+    """Продолжить Salesbot: отдать ответ Сони в бота (колбэк на return_url)."""
+    # Ответ Сони кладём в data.message — в следующем шаге бота он доступен как
+    # {{json.message}} (шаг «Отправить сообщение»). Хендлер show НЕ используем:
+    # его value ограничен 80 символами, а ответы ИИ длиннее.
+    # data.handoff = "1", когда Соня передаёт клиента живому флористу.
+    body = {"data": {"message": reply, "status": "ok",
+                     "handoff": "1" if handoff else "0"}}
+    await _amo_widget_post(return_url, body, "continue")
+
+
+_BOT_ID_RE = re.compile(r"/api/v4/(?:salesbot|marketingbot)/(\d+)/continue/")
+
+
+async def _salesbot_stop(return_url: str, session: str) -> None:
+    """Сделка уже у флориста: НЕ продолжаем бота (тогда шагу «Отправить сообщение»
+    нечего отправить) и останавливаем его по сделке через API
+    POST /api/v4/bots/{bot_id}/stop. Даже если остановка не пройдёт, бот просто
+    останется ждать ответа виджета — клиенту ничего не уйдёт."""
+    m = _BOT_ID_RE.search(return_url)
+    if not m or not session.isdigit():
+        log.warning("SALESBOT_HANDLER stop: нет bot_id/lead_id (url=%s, session=%s) — "
+                    "бот не продолжен, клиенту ничего не отправлено", return_url, session)
+        return
+    host = urlparse(return_url).netloc
+    url = f"https://{host}/api/v4/bots/{m.group(1)}/stop"
+    await _amo_widget_post(url, {"entity_id": int(session), "entity_type": "leads"}, "stop")
 
 
 SALESBOT_GREETING = (
     "Здравствуйте! 🌸 Меня зовут Соня, я помогу подобрать букет. "
     "Расскажите, для кого и по какому поводу — или какой бюджет?"
 )
+HANDOFF_REPLY = "Передаю флористу — он подключится 🌸"
 
 
 async def _salesbot_process(return_url: str, session: str, message: str) -> None:
-    """Фоново: ответ ИИ по сообщению клиента + колбэк в Salesbot. Если сообщения нет
-    (заход сделки на этап без текста) — шлём детерминированное приветствие."""
+    """Фоново: ответ ИИ по сообщению клиента + колбэк в Salesbot.
+
+    - сделка уже у флориста (state=handoff) -> Соня молчит: бота не продолжаем,
+      останавливаем через API (любой запрос, в т.ч. без текста);
+    - нет текста (заход сделки на этап) -> детерминированное приветствие;
+    - иначе ответ ИИ; при передаче флористу запоминаем state=handoff."""
     try:
         uid, is_new = await storage.web_session_uid(f"sb-{session}")
         if is_new:
             await storage.mark_session_start(uid)
-        if not message.strip():
-            await _salesbot_continue(return_url, SALESBOT_GREETING)
-            return
         async with _lock_for(uid):
             user = await storage.get_user(uid)
             if user and user.state == STATE_HANDOFF:
-                # Сделка уже у флориста — Соня молчит: сохраняем сообщение в историю
-                # и сразу завершаем бота, ничего клиенту не отправляя.
-                await storage.add_message(uid, "user", message)
+                if message.strip():
+                    await storage.add_message(uid, "user", message)
+                log.info("SALESBOT_HANDLER: сессия %s у флориста — Соня молчит", session)
                 silent = True
+            elif not message.strip():
+                silent, reply, handoff = False, SALESBOT_GREETING, False
             else:
                 silent = False
                 result = await consultant.generate(uid, message, honor_pause=False)
                 await storage.add_message(uid, "user", message)
                 handoff = result.handoff is not None
                 if handoff:
-                    reply = "Передаю флористу — он подключится 🌸"
+                    reply = HANDOFF_REPLY
                     # запоминаем передачу: дальше по этой сделке Соня не отвечает
                     await storage.update_user(uid, state=STATE_HANDOFF)
                 else:
                     reply = result.text or FALLBACK_ERROR
                 await storage.add_message(uid, "assistant", reply)
         if silent:
-            log.info("SALESBOT_HANDLER: сессия %s у флориста — бот завершён без ответа", session)
-            await _salesbot_continue(return_url, "", handoff=True, finish=True)
+            await _salesbot_stop(return_url, session)
             return
         await _salesbot_continue(return_url, reply, handoff=handoff)
     except Exception as exc:  # noqa: BLE001
